@@ -143,7 +143,10 @@ export async function POST(request) {
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      line_items: lineItems,
+      managed_payments: {
+        enabled: false,
+  },
+  line_items: lineItems,
       shipping_address_collection: {
         allowed_countries: ["CA"],
       },
