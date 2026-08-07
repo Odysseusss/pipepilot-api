@@ -3,7 +3,9 @@ import { neon } from "@neondatabase/serverless";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-const databaseUrl = process.env.STORAGE_DATABASE_URL;
+const databaseUrl =
+  process.env.STORAGE_DATABASE_URL_UNPOOLED;
+
 const sql = databaseUrl ? neon(databaseUrl) : null;
 
 function parseCart(cartReference) {
@@ -42,7 +44,9 @@ export async function POST(request) {
   }
 
   if (!databaseUrl || !sql) {
-    console.error("STORAGE_DATABASE_URL is not configured.");
+    console.error(
+      "STORAGE_DATABASE_URL_UNPOOLED is not configured."
+    );
 
     return Response.json(
       { error: "Database is not configured." },
@@ -80,7 +84,9 @@ export async function POST(request) {
     );
   }
 
-  console.log(`Stripe webhook verified: ${event.type} (${event.id})`);
+  console.log(
+    `Stripe webhook verified: ${event.type} (${event.id})`
+  );
 
   try {
     switch (event.type) {
@@ -98,7 +104,7 @@ export async function POST(request) {
           cart: session.metadata?.cart ?? null,
         });
 
-        // Do not remove inventory unless Stripe says payment is paid.
+        // Only reduce inventory for completed paid sessions.
         if (session.payment_status !== "paid") {
           console.log(
             `Inventory not changed because session ${session.id} is ${session.payment_status}.`
@@ -151,7 +157,9 @@ export async function POST(request) {
       }
 
       default:
-        console.log(`Unhandled Stripe event: ${event.type}`);
+        console.log(
+          `Unhandled Stripe event: ${event.type}`
+        );
     }
   } catch (error) {
     console.error(
