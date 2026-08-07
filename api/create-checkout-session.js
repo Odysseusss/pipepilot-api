@@ -177,8 +177,8 @@ export async function POST(request) {
           cart: cartReference,
         },
       },
-      success_url: `${origin}/dev/merch-v2/order-success.html?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/dev/merch-v2/merch.html?checkout=cancelled`,
+      success_url: `${origin}/order-success.html?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/merch.html?checkout=cancelled`,
     });
 
     if (!session.url) {
