@@ -21,6 +21,7 @@ const PRODUCTS = Object.freeze({
 });
 
 const SHIPPING_AMOUNT = 499;
+const FREE_SHIPPING_THRESHOLD = 3000;
 const DEFAULT_ALLOWED_ORIGINS = [
   "http://127.0.0.1:5500",
   "http://localhost:5500",
@@ -123,6 +124,12 @@ export async function POST(request) {
   try {
     const payload = await request.json();
     const cart = normalizeCart(payload?.items);
+    const merchandiseSubtotal = cart.reduce(
+      (total, { quantity, product }) => total + product.unitAmount * quantity,
+      0
+    );
+    const shippingAmount =
+      merchandiseSubtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_AMOUNT;
     const stripe = new Stripe(stripeSecretKey);
 
     const lineItems = cart.map(({ sku, quantity, product }) => ({
@@ -155,10 +162,13 @@ export async function POST(request) {
           shipping_rate_data: {
             type: "fixed_amount",
             fixed_amount: {
-              amount: SHIPPING_AMOUNT,
+              amount: shippingAmount,
               currency: "cad",
             },
-            display_name: "Shipping & handling",
+            display_name:
+              shippingAmount === 0
+                ? "Free shipping"
+                : "Shipping & handling",
           },
         },
       ],
