@@ -9,10 +9,34 @@ function configuredOrigins() {
     .filter(Boolean);
 }
 
+function isAllowedOrigin(origin, allowedOrigins) {
+  if (!origin) {
+    return false;
+  }
+
+  if (allowedOrigins.includes(origin)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(origin);
+    return (
+      url.protocol === "http:" &&
+      url.hostname === "localhost" &&
+      Boolean(url.port) &&
+      url.origin === origin
+    );
+  } catch {
+    return false;
+  }
+}
+
 function setCorsHeaders(response, origin, allowedOrigins) {
   response.setHeader("Vary", "Origin");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
 
-  if (origin && allowedOrigins.includes(origin)) {
+  if (isAllowedOrigin(origin, allowedOrigins)) {
     response.setHeader("Access-Control-Allow-Origin", origin);
   }
 }
@@ -74,15 +98,26 @@ export default async function handler(request, response) {
   const allowedOrigins = configuredOrigins();
   setCorsHeaders(response, origin, allowedOrigins);
 
+  if (request.method === "OPTIONS") {
+    if (!isAllowedOrigin(origin, allowedOrigins)) {
+      return sendJson(response, 403, {
+        ok: false,
+        error: "Origin not allowed.",
+      });
+    }
+
+    return response.status(204).end();
+  }
+
   if (request.method !== "POST") {
-    response.setHeader("Allow", "POST");
+    response.setHeader("Allow", "POST, OPTIONS");
     return sendJson(response, 405, {
       ok: false,
       error: "Method not allowed. Use POST.",
     });
   }
 
-  if (!origin || !allowedOrigins.includes(origin)) {
+  if (!isAllowedOrigin(origin, allowedOrigins)) {
     return sendJson(response, 403, {
       ok: false,
       error: "Origin not allowed.",
