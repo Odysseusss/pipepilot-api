@@ -10,6 +10,19 @@ async function accountForCustomer(customerId) {
   return rows[0] ?? null;
 }
 
+async function accountForSubscription(subscription) {
+  const customerId = typeof subscription.customer === "string"
+    ? subscription.customer
+    : subscription.customer?.id;
+  const byCustomer = customerId ? await accountForCustomer(customerId) : null;
+  if (byCustomer) return byCustomer;
+
+  const accountId = Number(subscription.metadata?.account_id);
+  if (!Number.isSafeInteger(accountId) || accountId < 1) return null;
+  const rows = await sql`SELECT id FROM app_accounts WHERE id = ${accountId} LIMIT 1`;
+  return rows[0] ?? null;
+}
+
 async function saveCoverage(accountId, coverage) {
   await sql`
     INSERT INTO app_entitlements (
@@ -90,25 +103,30 @@ export async function POST(request) {
       if (subscriptionId) {
         const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ["items.data.price.product"] });
         const coverage = paidInvoiceCoverage(invoice, subscription, configuration);
-        const customerId = typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id;
-        const account = customerId ? await accountForCustomer(customerId) : null;
+        const account = await accountForSubscription(subscription);
         if (coverage && account) {
           await saveCoverage(account.id, coverage);
           result = "paid_coverage_updated";
+        } else {
+          result = coverage ? "paid_account_not_found" : "paid_coverage_not_matched";
         }
+      } else {
+        result = "paid_subscription_not_found";
       }
     } else if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
       const supplied = event.data.object;
       const subscription = await stripe.subscriptions.retrieve(supplied.id, { expand: ["items.data.price.product"] });
       const state = subscriptionEntitlement(subscription, configuration);
-      const customerId = typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id;
-      const account = customerId ? await accountForCustomer(customerId) : null;
+      const account = await accountForSubscription(subscription);
       if (state && account) {
         await saveSubscriptionState(account.id, state);
         result = "subscription_state_updated";
+      } else {
+        result = state ? "subscription_account_not_found" : "subscription_not_matched";
       }
     }
     await sql`UPDATE stripe_app_events SET processed_at = NOW(), result = ${result} WHERE event_id = ${event.id}`;
+    console.info("App webhook processed", { eventId: event.id, eventType: event.type, result });
     return Response.json({ received: true, eventId: event.id });
   } catch (error) {
     console.error("App webhook processing failed:", error instanceof Error ? error.message : error);
