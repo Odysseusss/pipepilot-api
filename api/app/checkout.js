@@ -46,7 +46,6 @@ export async function POST(request) {
       customer: customerId,
       status: "all",
       limit: 20,
-      expand: ["data.items.data.price.product"],
     });
     const alreadySubscribed = subscriptions.data.some((subscription) => {
       if (!["active", "trialing", "past_due", "unpaid"].includes(subscription.status)) return false;
