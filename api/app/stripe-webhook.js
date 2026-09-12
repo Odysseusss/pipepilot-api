@@ -89,9 +89,12 @@ export async function POST(request) {
       INSERT INTO stripe_app_events (event_id, event_type)
       VALUES (${event.id}, ${event.type})
       ON CONFLICT (event_id) DO UPDATE SET event_type = EXCLUDED.event_type
-      RETURNING processed_at
+      RETURNING processed_at, result
     `;
-    if (existing[0]?.processed_at) return Response.json({ received: true, duplicate: true });
+    const completedResults = new Set(["paid_coverage_updated", "subscription_state_updated"]);
+    if (existing[0]?.processed_at && completedResults.has(existing[0]?.result)) {
+      return Response.json({ received: true, duplicate: true });
+    }
 
     const configuration = appBillingConfiguration();
     let result = "ignored";
