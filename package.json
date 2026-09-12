@@ -8,6 +8,10 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
+    "jose": "^6.2.12",
     "stripe": "^18.5.0"
+  },
+  "scripts": {
+    "test": "node --test"
   }
 }
