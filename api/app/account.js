@@ -44,9 +44,9 @@ export async function GET(request) {
       : null;
     const paidIsCurrent =
       entitlement?.tier === APP_TIERS.ANNUAL_FULL &&
-      entitlement?.status === "active" &&
       paidThrough !== null &&
-      Date.parse(paidThrough) > Date.now();
+      Date.parse(paidThrough) > Date.now() &&
+      account.suspended_at === null;
     const tier = paidIsCurrent ? APP_TIERS.ANNUAL_FULL : APP_TIERS.FREE;
 
     return appJson({

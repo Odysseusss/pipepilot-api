@@ -15,7 +15,7 @@ export function allowedAppOrigins() {
 export function appCorsHeaders(origin) {
   const headers = {
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Cache-Control": "no-store",
     Vary: "Origin",
   };

@@ -48,3 +48,26 @@ The checkout route expects:
 - Tax calculation is intentionally not enabled yet.
 - Inventory is currently a checkout limit, not shared live inventory.
 - Webhook fulfillment and stock deduction come next.
+
+## App account billing (test mode)
+
+The app subscription routes are separate from merchandise:
+
+- `POST /api/app/checkout` creates authenticated annual Checkout.
+- `POST /api/app/portal` opens billing management for the authenticated customer.
+- `POST /api/app/stripe-webhook` reconciles signed app billing events.
+
+Configure these variables only with Stripe test-mode resources until launch approval:
+
+- `STRIPE_APP_PRODUCT_ID`
+- `STRIPE_APP_ANNUAL_PRICE_ID`
+- `STRIPE_APP_CURRENCY`
+- `STRIPE_APP_ANNUAL_AMOUNT` (currently `1499`)
+- `STRIPE_APP_WEBHOOK_SECRET`
+- `MAILERLITE_API_KEY`
+- `MAILERLITE_APP_GROUP_ID`
+
+The configured Price must be active, recurring yearly, and match the configured product,
+currency, and amount. A Checkout return does not grant access; a signed paid invoice does.
+MailerLite enrollment is separate from account access and occurs only after an explicit
+newsletter opt-in from a verified user.
