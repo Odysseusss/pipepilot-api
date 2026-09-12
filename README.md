@@ -61,6 +61,7 @@ Configure these variables only with Stripe test-mode resources until launch appr
 
 - `STRIPE_APP_PRODUCT_ID`
 - `STRIPE_APP_ANNUAL_PRICE_ID`
+- `STRIPE_APP_SECRET_KEY`
 - `STRIPE_APP_CURRENCY`
 - `STRIPE_APP_ANNUAL_AMOUNT` (currently `1499`)
 - `STRIPE_APP_WEBHOOK_SECRET`

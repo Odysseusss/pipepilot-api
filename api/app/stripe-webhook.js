@@ -57,12 +57,12 @@ async function saveSubscriptionState(accountId, state) {
 }
 
 export async function POST(request) {
-  if (!sql || !process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_APP_WEBHOOK_SECRET) {
+  if (!sql || !process.env.STRIPE_APP_SECRET_KEY || !process.env.STRIPE_APP_WEBHOOK_SECRET) {
     return Response.json({ error: "App webhook is unavailable." }, { status: 503 });
   }
   const signature = request.headers.get("stripe-signature");
   if (!signature) return Response.json({ error: "Missing Stripe signature." }, { status: 400 });
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  const stripe = new Stripe(process.env.STRIPE_APP_SECRET_KEY);
   let event;
   try {
     event = stripe.webhooks.constructEvent(await request.text(), signature, process.env.STRIPE_APP_WEBHOOK_SECRET);

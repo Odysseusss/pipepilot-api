@@ -17,13 +17,13 @@ export function OPTIONS(request) {
 export async function POST(request) {
   const { origin, allowed } = requireAllowedAppOrigin(request);
   if (!allowed) return appJson({ error: "Origin not allowed." }, 403, origin);
-  if (!sql || !process.env.STRIPE_SECRET_KEY) return appJson({ error: "Billing is unavailable." }, 503, origin);
+  if (!sql || !process.env.STRIPE_APP_SECRET_KEY) return appJson({ error: "Billing is unavailable." }, 503, origin);
   const identity = await requireVerifiedAccount(request);
   if (!identity.ok) return appJson({ error: identity.error }, identity.status, origin);
 
   try {
     const configuration = appBillingConfiguration();
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    const stripe = new Stripe(process.env.STRIPE_APP_SECRET_KEY);
     const price = await stripe.prices.retrieve(configuration.priceId);
     assertAnnualPrice(price, configuration);
     const account = await upsertAppAccount(sql, identity);
