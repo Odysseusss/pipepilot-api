@@ -62,6 +62,7 @@ export async function POST(request) {
     const returnOrigin = safeReturnOrigin(origin, allowedAppOrigins());
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
+      managed_payments: { enabled: false },
       customer: customerId,
       line_items: [{ price: configuration.priceId, quantity: 1 }],
       allow_promotion_codes: false,
