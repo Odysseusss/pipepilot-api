@@ -98,8 +98,15 @@ export async function POST(request) {
 
     const configuration = appBillingConfiguration();
     let result = "ignored";
-    if (event.type === "invoice.paid") {
-      const invoice = event.data.object;
+    if (event.type === "invoice.paid" || event.type === "invoice_payment.paid") {
+      const supplied = event.data.object;
+      const suppliedInvoiceId = typeof supplied.invoice === "string" ? supplied.invoice : supplied.invoice?.id;
+      const invoice = event.type === "invoice_payment.paid"
+        ? suppliedInvoiceId ? await stripe.invoices.retrieve(suppliedInvoiceId) : null
+        : supplied;
+      if (!invoice) {
+        result = "paid_invoice_not_found";
+      } else {
       const subscriptionId = typeof invoice.subscription === "string"
         ? invoice.subscription
         : invoice.parent?.subscription_details?.subscription;
@@ -115,6 +122,7 @@ export async function POST(request) {
         }
       } else {
         result = "paid_subscription_not_found";
+      }
       }
     } else if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
       const supplied = event.data.object;
