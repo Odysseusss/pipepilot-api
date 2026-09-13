@@ -46,6 +46,7 @@ async function saveCoverage(accountId, coverage) {
       cancel_at_period_end = EXCLUDED.cancel_at_period_end,
       synchronized_at = NOW(),
       updated_at = NOW()
+    WHERE app_entitlements.status <> 'complimentary_lifetime'
   `;
 }
 
@@ -66,6 +67,7 @@ async function saveSubscriptionState(accountId, state) {
       cancel_at_period_end = EXCLUDED.cancel_at_period_end,
       synchronized_at = NOW(),
       updated_at = NOW()
+    WHERE app_entitlements.status <> 'complimentary_lifetime'
   `;
 }
 

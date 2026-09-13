@@ -4,6 +4,7 @@ import { requireVerifiedAccount } from "../_lib/app-auth.js";
 import { allowedAppOrigins, appCorsHeaders, appJson, requireAllowedAppOrigin } from "../_lib/app-http.js";
 import { currentAppEntitlement, upsertAppAccount } from "../_lib/app-account-store.js";
 import { APP_BILLING_SOURCE, appBillingConfiguration, assertAnnualPrice, safeReturnOrigin } from "../_lib/app-billing.js";
+import { COMPLIMENTARY_LIFETIME_STATUS } from "../_lib/app-capabilities.js";
 
 const databaseUrl = process.env.STORAGE_DATABASE_URL_UNPOOLED;
 const sql = databaseUrl ? neon(databaseUrl) : null;
@@ -29,7 +30,8 @@ export async function POST(request) {
     const account = await upsertAppAccount(sql, identity);
     if (account.suspended_at) return appJson({ error: "Account access is suspended." }, 403, origin);
     const entitlement = await currentAppEntitlement(sql, account.id);
-    if (entitlement?.paid_through && Date.parse(entitlement.paid_through) > Date.now()) {
+    if (entitlement?.status === COMPLIMENTARY_LIFETIME_STATUS ||
+        (entitlement?.paid_through && Date.parse(entitlement.paid_through) > Date.now())) {
       return appJson({ error: "This account already has paid access." }, 409, origin);
     }
 

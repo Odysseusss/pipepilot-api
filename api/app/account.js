@@ -1,6 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { requireVerifiedAccount } from "../_lib/app-auth.js";
-import { APP_TIERS, capabilitiesFor } from "../_lib/app-capabilities.js";
+import { resolveCapabilities } from "../_lib/app-capabilities.js";
 import { appCorsHeaders, appJson, requireAllowedAppOrigin } from "../_lib/app-http.js";
 
 const databaseUrl = process.env.STORAGE_DATABASE_URL_UNPOOLED;
@@ -39,15 +39,9 @@ export async function GET(request) {
       LIMIT 1
     `;
     const entitlement = entitlementRows[0] ?? null;
-    const paidThrough = entitlement?.paid_through
-      ? new Date(entitlement.paid_through).toISOString()
-      : null;
-    const paidIsCurrent =
-      entitlement?.tier === APP_TIERS.ANNUAL_FULL &&
-      paidThrough !== null &&
-      Date.parse(paidThrough) > Date.now() &&
-      account.suspended_at === null;
-    const tier = paidIsCurrent ? APP_TIERS.ANNUAL_FULL : APP_TIERS.FREE;
+    const resolved = resolveCapabilities(entitlement, {
+      suspended: account.suspended_at !== null,
+    });
 
     return appJson({
       account: {
@@ -56,12 +50,12 @@ export async function GET(request) {
         suspended: account.suspended_at !== null,
       },
       entitlement: {
-        tier,
+        tier: resolved.tier,
         status: entitlement?.status ?? "free",
-        paidThrough,
+        paidThrough: resolved.paidThrough,
         cancelAtPeriodEnd: Boolean(entitlement?.cancel_at_period_end),
       },
-      capabilities: capabilitiesFor(tier),
+      capabilities: resolved.capabilities,
     }, 200, origin);
   } catch (error) {
     console.error("App account lookup failed:", error instanceof Error ? error.message : error);
