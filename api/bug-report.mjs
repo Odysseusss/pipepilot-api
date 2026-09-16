@@ -6,7 +6,7 @@ function configuredOrigins() {
   return (process.env.BUG_REPORT_ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((origin) => origin.trim())
-    .filter(Boolean);
+    .filter(Boolean).concat("https://app.pipepilotapp.com");
 }
 
 function isAllowedOrigin(origin, allowedOrigins) {
