@@ -1,3 +1,4 @@
+import { administratorAccountCount } from "../_lib/app-account-count.js";
 import { neon } from "@neondatabase/serverless";
 import { requireVerifiedAccount } from "../_lib/app-auth.js";
 import { resolveCapabilities } from "../_lib/app-capabilities.js";
@@ -55,7 +56,7 @@ export async function GET(request) {
         paidThrough: resolved.paidThrough,
         cancelAtPeriodEnd: Boolean(entitlement?.cancel_at_period_end),
       },
-      capabilities: resolved.capabilities,
+      capabilities: { ...resolved.capabilities, ...await administratorAccountCount(sql, resolved.capabilities) },
     }, 200, origin);
   } catch (error) {
     console.error("App account lookup failed:", error instanceof Error ? error.message : error);
