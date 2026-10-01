@@ -30,6 +30,17 @@ Expected response:
 {"ok":true,"service":"pipepilot-api","environment":"production"}
 ```
 
+## Petey
+
+`POST /api/petey` is the server-side Petey proxy. It keeps the OpenAI key out
+of Flutter and browser builds, sends requests with `store: false`, requires a
+strict intent response, and never receives direct drawing tools.
+
+Configure `OPENAI_API_KEY` in Vercel. `PETEY_MODEL` defaults to
+`gpt-5-mini`. `PETEY_ALLOWED_ORIGINS` is optional; the production Pipe Pilot
+origins and private-network HTTP origins used for device testing are accepted
+by default. Environment-variable changes require a new deployment.
+
 The checkout route expects:
 
 ```json
