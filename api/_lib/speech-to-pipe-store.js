@@ -81,13 +81,14 @@ export function createSpeechToPipeStore(sql, {
     },
 
     async completeSubmission({
-      started, model, upstreamRequestId, reply, inputTokens, outputTokens,
+      started, model, reasoningEffort, upstreamRequestId, reply, inputTokens, outputTokens,
       estimatedCostMicros, latencyMs,
     }) {
       const replyJson = JSON.stringify(reply);
       await sql`
         UPDATE speech_to_pipe_turns
         SET response_payload = ${replyJson}::jsonb, model = ${model},
+            reasoning_effort = ${reasoningEffort},
             upstream_request_id = ${upstreamRequestId},
             input_tokens = ${inputTokens}, output_tokens = ${outputTokens},
             estimated_cost_micros = ${estimatedCostMicros},
@@ -105,17 +106,18 @@ export function createSpeechToPipeStore(sql, {
       `;
       await sql`
         UPDATE speech_to_pipe_assistances
-        SET status = ${reply.status}, model = ${model},
+        SET status = ${reply.status}, model = ${model}, reasoning_effort = ${reasoningEffort},
             last_response = ${replyJson}::jsonb, updated_at = NOW()
         WHERE id = ${started.assistanceId}::uuid
           AND account_id = ${started.accountId}
       `;
     },
 
-    async failSubmission({ started, model, stage, message, latencyMs }) {
+    async failSubmission({ started, model, reasoningEffort, stage, message, latencyMs }) {
       await sql`
         UPDATE speech_to_pipe_turns
-        SET model = ${model}, failure_stage = ${stage}, failure_message = ${message},
+        SET model = ${model}, reasoning_effort = ${reasoningEffort},
+            failure_stage = ${stage}, failure_message = ${message},
             latency_ms = ${latencyMs}, completed_at = NOW()
         WHERE id = ${started.turnId}
       `;

@@ -70,10 +70,12 @@ test("paid submission returns strict operations and records cost telemetry", asy
   assert.equal(body.remainingRequests, 9);
   assert.equal(body.operations[0].kind, "double_ninety");
   assert.equal(upstreamBody.model, "gpt-6-luna");
+  assert.equal(upstreamBody.reasoning.effort, "none");
   assert.equal(upstreamBody.store, false);
   assert.equal(upstreamBody.text.format.strict, true);
   assert.equal(completion.inputTokens, 100);
   assert.equal(completion.outputTokens, 40);
+  assert.equal(completion.reasoningEffort, "none");
   assert.equal(completion.estimatedCostMicros, 30);
 });
 

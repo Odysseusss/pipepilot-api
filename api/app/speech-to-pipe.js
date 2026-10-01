@@ -9,6 +9,8 @@ const MAX_INSTRUCTION_CHARS = 1200;
 const MAX_HISTORY_MESSAGES = 6;
 const MAX_HISTORY_CHARS = 1200;
 const DEFAULT_MODEL = "gpt-6-luna";
+const DEFAULT_REASONING_EFFORT = "none";
+const REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
 const DEFAULT_DAILY_LIMIT = 10;
 const UPSTREAM_TIMEOUT_MS = 20_000;
 const OUTCOMES = new Set([
@@ -99,8 +101,9 @@ export function createSpeechToPipeHandler({
 
     const apiKey = environment.OPENAI_API_KEY?.trim();
     const model = environment.SPEECH_TO_PIPE_MODEL?.trim() || DEFAULT_MODEL;
+    const reasoningEffort = configuredReasoningEffort(environment.SPEECH_TO_PIPE_REASONING_EFFORT);
     if (!apiKey) {
-      await safeFail(store, started, model, "configuration", "OPENAI_API_KEY is missing", 0);
+      await safeFail(store, started, model, reasoningEffort, "configuration", "OPENAI_API_KEY is missing", 0);
       return appJson({ error: "Speech-to-Pipe is not configured." }, 503, origin);
     }
 
@@ -114,6 +117,7 @@ export function createSpeechToPipeHandler({
         headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({
           model,
+          reasoning: { effort: reasoningEffort },
           instructions: SPEECH_TO_PIPE_SYSTEM_PROMPT,
           input: responseInput(body),
           max_output_tokens: 900,
@@ -123,19 +127,19 @@ export function createSpeechToPipeHandler({
       });
     } catch (error) {
       const latencyMs = Math.max(0, now() - requestStartedAt);
-      await safeFail(store, started, model, "upstream", error?.name ?? "request failed", latencyMs);
+      await safeFail(store, started, model, reasoningEffort, "upstream", error?.name ?? "request failed", latencyMs);
       return appJson({ error: "Speech-to-Pipe could not reach the language service." }, 502, origin);
     }
 
     const result = await safelyReadJson(upstreamResponse);
     const latencyMs = Math.max(0, now() - requestStartedAt);
     if (!upstreamResponse.ok) {
-      await safeFail(store, started, model, "upstream", `HTTP ${upstreamResponse.status}`, latencyMs);
+      await safeFail(store, started, model, reasoningEffort, "upstream", `HTTP ${upstreamResponse.status}`, latencyMs);
       return appJson({ error: "Speech-to-Pipe could not interpret that instruction." }, 502, origin);
     }
     const reply = structuredReply(responseText(result));
     if (!reply) {
-      await safeFail(store, started, model, "structured_output", "Invalid structured response", latencyMs);
+      await safeFail(store, started, model, reasoningEffort, "structured_output", "Invalid structured response", latencyMs);
       return appJson({ error: "Speech-to-Pipe returned an invalid plan." }, 502, origin);
     }
 
@@ -144,7 +148,7 @@ export function createSpeechToPipeHandler({
     const estimatedCostMicros = estimateCostMicros(inputTokens, outputTokens, environment);
     try {
       await store.completeSubmission({
-        started, model,
+        started, model, reasoningEffort,
         upstreamRequestId: upstreamResponse.headers.get("x-request-id"),
         reply, inputTokens, outputTokens, estimatedCostMicros, latencyMs,
       });
@@ -255,8 +259,8 @@ export function createMemoryRateLimiter({ limit = 8, periodMs = 60_000, now = ()
   } };
 }
 
-async function safeFail(store, started, model, stage, message, latencyMs) {
-  try { await store.failSubmission({ started, model, stage, message, latencyMs }); }
+async function safeFail(store, started, model, reasoningEffort, stage, message, latencyMs) {
+  try { await store.failSubmission({ started, model, reasoningEffort, stage, message, latencyMs }); }
   catch (error) { console.error("Speech-to-Pipe failure report failed", error instanceof Error ? error.message : error); }
 }
 function responseText(result) {
@@ -273,3 +277,7 @@ function optionalUuid(value) { return value == null || (typeof value === "string
 function positiveInteger(value, fallback) { const parsed = Number(value); return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback; }
 function nonNegativeInteger(value) { return Number.isInteger(value) && value >= 0 ? value : 0; }
 function nonNegativeNumber(value, fallback) { const parsed = Number(value); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
+function configuredReasoningEffort(value) {
+  const effort = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return REASONING_EFFORTS.has(effort) ? effort : DEFAULT_REASONING_EFFORT;
+}
