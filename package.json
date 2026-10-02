@@ -12,6 +12,7 @@
     "stripe": "^18.5.0"
   },
   "scripts": {
+    "vercel-build": "node scripts/vercel-build.mjs",
     "test": "node --test"
   }
 }
