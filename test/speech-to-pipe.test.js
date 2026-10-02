@@ -72,6 +72,7 @@ test("paid submission returns strict operations and records cost telemetry", asy
   assert.equal(response.status, 200);
   assert.equal(body.status, "ready");
   assert.equal(body.remainingRequests, 9);
+  assert.equal(body.unlimitedRequests, false);
   assert.equal(body.operations[0].kind, "double_ninety");
   assert.equal(upstreamBody.model, "gpt-6-luna");
   assert.equal(upstreamBody.reasoning.effort, "none");
@@ -81,6 +82,35 @@ test("paid submission returns strict operations and records cost telemetry", asy
   assert.equal(completion.outputTokens, 40);
   assert.equal(completion.reasoningEffort, "none");
   assert.equal(completion.estimatedCostMicros, 30);
+});
+
+test("administrator submission reports unlimited requests", async () => {
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore({
+      startSubmission: async () => ({
+        allowed: true,
+        accountId: 1,
+        assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c",
+        turnId: 2,
+        usageDate: "2026-10-01",
+        remaining: null,
+        unlimited: true,
+      }),
+    }),
+    fetcher: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(readyPlan()),
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }), { status: 200 }),
+  });
+
+  const response = await handler(request(interpretBody()));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.remainingRequests, null);
+  assert.equal(body.unlimitedRequests, true);
 });
 
 test("free accounts are rejected before an OpenAI call", async () => {

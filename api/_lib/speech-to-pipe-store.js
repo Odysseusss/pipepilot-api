@@ -16,6 +16,7 @@ export function createSpeechToPipeStore(sql, {
       if (access.tier !== APP_TIERS.ANNUAL_FULL) {
         return { allowed: false, reason: "paid" };
       }
+      const unlimited = access.capabilities.administrator === true;
 
       let resolvedAssistanceId = assistanceId;
       let originalInstruction = instruction;
@@ -33,16 +34,26 @@ export function createSpeechToPipeStore(sql, {
       }
 
       const usageDate = now().toISOString().slice(0, 10);
-      const usageRows = await sql`
-        INSERT INTO speech_to_pipe_daily_usage (
-          account_id, usage_date, request_count
-        ) VALUES (${account.id}, ${usageDate}::date, 1)
-        ON CONFLICT (account_id, usage_date) DO UPDATE
-        SET request_count = speech_to_pipe_daily_usage.request_count + 1,
-            updated_at = NOW()
-        WHERE speech_to_pipe_daily_usage.request_count < ${dailyLimit}
-        RETURNING request_count
-      `;
+      const usageRows = unlimited
+        ? await sql`
+            INSERT INTO speech_to_pipe_daily_usage (
+              account_id, usage_date, request_count
+            ) VALUES (${account.id}, ${usageDate}::date, 1)
+            ON CONFLICT (account_id, usage_date) DO UPDATE
+            SET request_count = speech_to_pipe_daily_usage.request_count + 1,
+                updated_at = NOW()
+            RETURNING request_count
+          `
+        : await sql`
+            INSERT INTO speech_to_pipe_daily_usage (
+              account_id, usage_date, request_count
+            ) VALUES (${account.id}, ${usageDate}::date, 1)
+            ON CONFLICT (account_id, usage_date) DO UPDATE
+            SET request_count = speech_to_pipe_daily_usage.request_count + 1,
+                updated_at = NOW()
+            WHERE speech_to_pipe_daily_usage.request_count < ${dailyLimit}
+            RETURNING request_count
+          `;
       if (!usageRows[0]) return { allowed: false, reason: "quota" };
 
       if (!resolvedAssistanceId) {
@@ -81,7 +92,10 @@ export function createSpeechToPipeStore(sql, {
         assistanceId: resolvedAssistanceId,
         turnId: turnRows[0].id,
         usageDate,
-        remaining: Math.max(0, dailyLimit - Number(usageRows[0].request_count)),
+        remaining: unlimited
+          ? null
+          : Math.max(0, dailyLimit - Number(usageRows[0].request_count)),
+        unlimited,
         originalInstruction,
         priorRequirements,
       };

@@ -161,6 +161,7 @@ export function createSpeechToPipeHandler({
     return appJson({
       assistanceId: started.assistanceId,
       remainingRequests: started.remaining,
+      unlimitedRequests: started.unlimited === true,
       ...reply,
     }, 200, origin);
   };
