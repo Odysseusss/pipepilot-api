@@ -54,9 +54,6 @@ The model defaults to `gpt-6-luna`, reasoning defaults to `none`, and the daily
 allowance defaults to 10 paid-account submissions. Apply migration 003 before
 deploying this route.
 
-Production Vercel builds apply migration 003 transactionally before publishing
-the deployment. Preview and local builds never alter the production database.
-
 The checkout route expects:
 
 ```json
