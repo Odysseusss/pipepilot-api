@@ -18,13 +18,18 @@ export function createSpeechToPipeStore(sql, {
       }
 
       let resolvedAssistanceId = assistanceId;
+      let originalInstruction = instruction;
+      let priorRequirements = null;
       if (resolvedAssistanceId) {
         const existing = await sql`
-          SELECT id FROM speech_to_pipe_assistances
+          SELECT id, first_instruction, last_response
+          FROM speech_to_pipe_assistances
           WHERE id = ${resolvedAssistanceId}::uuid AND account_id = ${account.id}
           LIMIT 1
         `;
         if (!existing[0]) return { allowed: false, reason: "assistance" };
+        originalInstruction = existing[0].first_instruction ?? instruction;
+        priorRequirements = existing[0].last_response?.requirements ?? null;
       }
 
       const usageDate = now().toISOString().slice(0, 10);
@@ -77,6 +82,8 @@ export function createSpeechToPipeStore(sql, {
         turnId: turnRows[0].id,
         usageDate,
         remaining: Math.max(0, dailyLimit - Number(usageRows[0].request_count)),
+        originalInstruction,
+        priorRequirements,
       };
     },
 

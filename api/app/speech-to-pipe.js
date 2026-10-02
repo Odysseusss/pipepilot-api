@@ -119,7 +119,7 @@ export function createSpeechToPipeHandler({
           model,
           reasoning: { effort: reasoningEffort },
           instructions: SPEECH_TO_PIPE_SYSTEM_PROMPT,
-          input: responseInput(body),
+          input: responseInput(body, started),
           max_output_tokens: 900,
           store: false,
           text: { format: SPEECH_TO_PIPE_RESPONSE_FORMAT },
@@ -137,7 +137,10 @@ export function createSpeechToPipeHandler({
       await safeFail(store, started, model, reasoningEffort, "upstream", `HTTP ${upstreamResponse.status}`, latencyMs);
       return appJson({ error: "Speech-to-Pipe could not interpret that instruction." }, 502, origin);
     }
-    const reply = structuredReply(responseText(result));
+    const reply = enforceConversationContinuity(
+      structuredReply(responseText(result)),
+      started,
+    );
     if (!reply) {
       await safeFail(store, started, model, reasoningEffort, "structured_output", "Invalid structured response", latencyMs);
       return appJson({ error: "Speech-to-Pipe returned an invalid plan." }, 502, origin);
@@ -186,12 +189,14 @@ async function recordOutcome({ body, identity, store, origin }) {
   }
 }
 
-function responseInput(body) {
+function responseInput(body, started) {
   return [
     ...body.history.map(({ role, content }) => ({ role, content })),
     {
       role: "user",
       content: JSON.stringify({
+        originalInstruction: started.originalInstruction ?? body.instruction.trim(),
+        priorFittingRequirements: started.priorRequirements ?? null,
         instruction: body.instruction.trim(),
         drawingContext: body.drawingContext ?? null,
         selection: body.selection ?? null,
@@ -229,13 +234,112 @@ function structuredReply(value) {
   if (!parsed || !["ready", "clarification", "unsupported"].includes(parsed.status) ||
       typeof parsed.message !== "string" || !parsed.message.trim() ||
       !parsed.source || !["default", "selected", "reference"].includes(parsed.source.mode) ||
+      !validFittingRequirements(parsed.requirements) ||
       !Array.isArray(parsed.operations) || parsed.operations.length > 6) return null;
   const question = typeof parsed.question === "string" && parsed.question.trim() ? parsed.question.trim() : null;
   if (parsed.status === "ready" && (parsed.operations.length === 0 || question !== null)) return null;
   if (parsed.status === "clarification" && (!question || parsed.operations.length !== 0)) return null;
   if (parsed.status === "unsupported" && parsed.operations.length !== 0) return null;
   if (parsed.source.mode === "reference" && typeof parsed.source.fittingType !== "string") return null;
-  return { status: parsed.status, message: parsed.message.trim(), question, source: parsed.source, operations: parsed.operations };
+  return {
+    status: parsed.status,
+    message: parsed.message.trim(),
+    question,
+    source: parsed.source,
+    requirements: parsed.requirements,
+    operations: parsed.operations,
+  };
+}
+
+function enforceConversationContinuity(reply, started) {
+  if (!reply) return null;
+  const prior = started.priorRequirements?.fittingRoles ?? [];
+  const current = reply.requirements.fittingRoles;
+  const retained = prior.every((requiredRole) => current.some((candidate) =>
+    sameFittingRole(requiredRole, candidate) &&
+    (requiredRole.fittingType == null ||
+      requiredRole.fittingType === candidate.fittingType)
+  ));
+  const readyIsComplete = reply.status !== "ready" ||
+    (current.every((role) => typeof role.fittingType === "string" && role.fittingType.length > 0) &&
+      current.every((role) => fittingRoleIsRepresented(role, reply)));
+  if (retained && readyIsComplete) return reply;
+
+  const requirements = mergeFittingRequirements(prior, current);
+  const unresolved = requirements.fittingRoles
+    .filter((role) => role.fittingType == null)
+    .map((role) => role.role);
+  return {
+    status: "clarification",
+    message: "The fitting requirements still need to be resolved before preview.",
+    question: unresolved.length > 0
+      ? `Which fitting belongs in the unresolved ${[...new Set(unresolved)].join(" and ")} position?`
+      : "Please confirm the complete fitting-to-fitting instruction so no fitting is dropped.",
+    source: reply.source,
+    requirements,
+    operations: [],
+  };
+}
+
+function mergeFittingRequirements(prior, current) {
+  const merged = new Map();
+  for (const role of prior) merged.set(fittingRoleKey(role), { ...role });
+  for (const role of current) {
+    const key = fittingRoleKey(role);
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...role });
+    } else if (existing.fittingType == null && role.fittingType != null) {
+      merged.set(key, { ...existing, fittingType: role.fittingType });
+    }
+  }
+  return { fittingRoles: [...merged.values()] };
+}
+
+function validFittingRequirements(value) {
+  if (!value || !Array.isArray(value.fittingRoles) || value.fittingRoles.length > 18) {
+    return false;
+  }
+  const keys = new Set();
+  for (const role of value.fittingRoles) {
+    if (!role || !Number.isInteger(role.operationIndex) ||
+        role.operationIndex < 0 || role.operationIndex > 5 ||
+        !["start", "end", "fitting", "source", "reference"].includes(role.role) ||
+        !(role.fittingType == null || (typeof role.fittingType === "string" && role.fittingType.length > 0))) {
+      return false;
+    }
+    const key = fittingRoleKey(role);
+    if (keys.has(key)) return false;
+    keys.add(key);
+  }
+  return true;
+}
+
+function sameFittingRole(left, right) {
+  return fittingRoleKey(left) === fittingRoleKey(right);
+}
+
+function fittingRoleKey(role) {
+  return `${role.operationIndex}:${role.role}`;
+}
+
+function fittingRoleIsRepresented(requirement, reply) {
+  const operation = reply.operations[requirement.operationIndex];
+  if (!operation) return false;
+  const type = requirement.fittingType;
+  if (operation.kind === "double_ninety" &&
+      (requirement.role === "start" || requirement.role === "end")) {
+    return type === "ELBOW_90";
+  }
+  if (requirement.role === "source") {
+    return reply.source?.fittingType === type;
+  }
+  if (requirement.role === "reference") {
+    return operation.referenceFittingType === type;
+  }
+  if (requirement.role === "start") return operation.startFitting === type;
+  if (requirement.role === "end") return operation.endFitting === type;
+  return operation.fittingType === type;
 }
 
 function estimateCostMicros(inputTokens, outputTokens, environment) {

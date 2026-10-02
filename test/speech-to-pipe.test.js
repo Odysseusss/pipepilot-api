@@ -35,6 +35,10 @@ function readyPlan() {
   return {
     status: "ready", message: "Ready to preview.", question: null,
     source: { mode: "default", fittingType: null, position: null },
+    requirements: { fittingRoles: [
+      { operationIndex: 0, role: "start", fittingType: "ELBOW_90" },
+      { operationIndex: 0, role: "end", fittingType: "ELBOW_90" },
+    ] },
     operations: [{ ...empty, kind: "double_ninety", direction: "north", lengthSixteenths: 576 }],
   };
 }
@@ -106,7 +110,12 @@ test("missing facts return one clarification and no operations", async () => {
   const clarification = {
     status: "clarification", message: "Direction required.",
     question: "Which direction does the spool run?",
-    source: { mode: "default", fittingType: null, position: null }, operations: [],
+    source: { mode: "default", fittingType: null, position: null },
+    requirements: { fittingRoles: [
+      { operationIndex: 0, role: "start", fittingType: "ELBOW_90" },
+      { operationIndex: 0, role: "end", fittingType: "ELBOW_90" },
+    ] },
+    operations: [],
   };
   const handler = createSpeechToPipeHandler({
     environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
@@ -118,6 +127,146 @@ test("missing facts return one clarification and no operations", async () => {
   assert.equal(body.status, "clarification");
   assert.equal(body.question, "Which direction does the spool run?");
   assert.deepEqual(body.operations, []);
+});
+
+test("clarification cannot erase an explicitly requested fitting pair", async () => {
+  let upstreamBody;
+  const bareRun = {
+    ...readyPlan(),
+    message: "Ready to preview an 8 ft north run from a WNRF flange end.",
+    requirements: { fittingRoles: [
+      { operationIndex: 0, role: "start", fittingType: "WNRF" },
+    ] },
+    operations: [{
+      ...readyPlan().operations[0],
+      kind: "run",
+      direction: "north",
+      lengthSixteenths: 8 * 12 * 16,
+    }],
+  };
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
+    store: fakeStore({
+      startSubmission: async () => ({
+        allowed: true, accountId: 1,
+        assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c",
+        turnId: 2, usageDate: "2026-10-01", remaining: 8,
+        originalInstruction: "Flange of flange 8 foot and end running north",
+        priorRequirements: { fittingRoles: [
+          { operationIndex: 0, role: "start", fittingType: null },
+          { operationIndex: 0, role: "end", fittingType: null },
+        ] },
+      }),
+    }),
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        output_text: JSON.stringify(bareRun),
+      }), { status: 200 });
+    },
+  });
+  const response = await handler(request(interpretBody({
+    instruction: "wnrf",
+    history: [
+      { role: "user", content: "Flange of flange 8 foot and end running north" },
+      { role: "assistant", content: "Which flange type should start the run?" },
+    ],
+  })));
+  const body = await response.json();
+
+  assert.equal(body.status, "clarification");
+  assert.match(body.question, /end/i);
+  assert.deepEqual(body.requirements.fittingRoles, [
+    { operationIndex: 0, role: "start", fittingType: "WNRF" },
+    { operationIndex: 0, role: "end", fittingType: null },
+  ]);
+  const currentTurn = JSON.parse(upstreamBody.input.at(-1).content);
+  assert.equal(
+    currentTurn.originalInstruction,
+    "Flange of flange 8 foot and end running north",
+  );
+  assert.equal(currentTurn.priorFittingRequirements.fittingRoles.length, 2);
+  assert.deepEqual(body.operations, []);
+});
+
+test("clarification preserves a resolved flange-to-flange assembly", async () => {
+  const assembly = {
+    ...readyPlan(),
+    message: "Ready to preview the WNRF spool.",
+    requirements: { fittingRoles: [
+      { operationIndex: 0, role: "start", fittingType: "WNRF" },
+      { operationIndex: 0, role: "end", fittingType: "WNRF" },
+    ] },
+    operations: [{
+      ...readyPlan().operations[0],
+      kind: "assembly",
+      direction: "north",
+      lengthSixteenths: 8 * 12 * 16,
+      startFitting: "WNRF",
+      endFitting: "WNRF",
+      measurementBasis: "end_to_end",
+    }],
+  };
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
+    store: fakeStore(),
+    fetcher: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(assembly),
+    }), { status: 200 }),
+  });
+  const response = await handler(request(interpretBody({
+    instruction: "wnrf for both",
+    history: [
+      { role: "user", content: "flange to flange 8 feet end to end north" },
+      { role: "assistant", content: "Which flange type is used at both ends?" },
+    ],
+  })));
+  const body = await response.json();
+
+  assert.equal(body.status, "ready");
+  assert.equal(body.operations[0].kind, "assembly");
+  assert.equal(body.operations[0].startFitting, "WNRF");
+  assert.equal(body.operations[0].endFitting, "WNRF");
+});
+
+test("continuity ledger protects every fitting role without type-specific rules", async () => {
+  const droppedReducer = {
+    ...readyPlan(),
+    requirements: { fittingRoles: [] },
+    operations: [{
+      ...readyPlan().operations[0], kind: "run", direction: "east",
+      lengthSixteenths: 48 * 16,
+    }],
+  };
+  const protectedTypes = ["TEE", "CONCENTRIC_REDUCER", "VALVE", "STRAINER"];
+  for (const fittingType of protectedTypes) {
+    const handler = createSpeechToPipeHandler({
+      environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
+      rateLimiter: { allow: () => true },
+      store: fakeStore({
+        startSubmission: async () => ({
+          allowed: true, accountId: 1,
+          assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c",
+          turnId: 2, usageDate: "2026-10-01", remaining: 8,
+          originalInstruction: `90 to ${fittingType} four feet east`,
+          priorRequirements: { fittingRoles: [
+            { operationIndex: 0, role: "start", fittingType: "ELBOW_90" },
+            { operationIndex: 0, role: "end", fittingType },
+          ] },
+        }),
+      }),
+      fetcher: async () => new Response(JSON.stringify({
+        output_text: JSON.stringify(droppedReducer),
+      }), { status: 200 }),
+    });
+    const response = await handler(request(interpretBody({ instruction: "yes" })));
+    const body = await response.json();
+    assert.equal(body.status, "clarification", fittingType);
+    assert.deepEqual(body.requirements.fittingRoles, [
+      { operationIndex: 0, role: "start", fittingType: "ELBOW_90" },
+      { operationIndex: 0, role: "end", fittingType },
+    ], fittingType);
+  }
 });
 
 test("drawing outcomes are attached to the assistance report", async () => {
