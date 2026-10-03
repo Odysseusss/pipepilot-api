@@ -191,19 +191,35 @@ async function recordOutcome({ body, identity, store, origin }) {
 }
 
 function responseInput(body, started) {
+  const originalInstruction = normalizeTradeDefaults(
+    started.originalInstruction ?? body.instruction.trim(),
+  );
+  const instruction = normalizeTradeDefaults(body.instruction.trim());
   return [
     ...body.history.map(({ role, content }) => ({ role, content })),
     {
       role: "user",
       content: JSON.stringify({
-        originalInstruction: started.originalInstruction ?? body.instruction.trim(),
+        originalInstruction,
         priorFittingRequirements: started.priorRequirements ?? null,
-        instruction: body.instruction.trim(),
+        instruction,
         drawingContext: body.drawingContext ?? null,
         selection: body.selection ?? null,
       }),
     },
   ];
+}
+
+function normalizeTradeDefaults(value) {
+  return value
+    .replace(
+      /\b(?:well|weld|welding)\s+neck\b(?!\s+(?:flat|full|raised|raise|raises|race)\s+face\b)/gi,
+      "WNRF",
+    )
+    .replace(
+      /\bslip[ -]?on\b(?!\s+(?:flat|full|raised|raise|raises|race)\s+face\b)/gi,
+      "SORF",
+    );
 }
 
 function validInterpretRequest(body) {

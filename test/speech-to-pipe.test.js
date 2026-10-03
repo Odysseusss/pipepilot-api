@@ -61,6 +61,59 @@ test("raised face is the default instead of a clarification", () => {
   assert.match(prompt, /bare "flange" still needs its flange type/i);
 });
 
+test("spoken flange types are normalized to raised face before interpretation", async () => {
+  let upstreamBody;
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(readyPlan()) }), {
+        status: 200,
+      });
+    },
+  });
+
+  const response = await handler(request(interpretBody({
+    instruction: "Well neck to weld neck 85 inches and end running south",
+  })));
+
+  assert.equal(response.status, 200);
+  const modelInput = JSON.parse(upstreamBody.input.at(-1).content);
+  assert.equal(
+    modelInput.instruction,
+    "WNRF to WNRF 85 inches and end running south",
+  );
+});
+
+test("explicit flat-face flange language overrides the raised-face default", async () => {
+  let upstreamBody;
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(readyPlan()) }), {
+        status: 200,
+      });
+    },
+  });
+
+  await handler(request(interpretBody({
+    instruction: "weld neck flat face to slip on full face 8 feet end to end north",
+  })));
+
+  const modelInput = JSON.parse(upstreamBody.input.at(-1).content);
+  assert.equal(
+    modelInput.instruction,
+    "weld neck flat face to slip on full face 8 feet end to end north",
+  );
+});
+
 test("paid submission returns strict operations and records cost telemetry", async () => {
   let completion;
   let upstreamBody;
