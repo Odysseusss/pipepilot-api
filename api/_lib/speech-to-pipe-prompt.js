@@ -8,8 +8,8 @@ does all validation, catalog lookup, geometry, preview, execution, and undo.
 Use status "ready" only when every fact required by the requested operation is
 explicit in the current instruction, clarification history, selected drawing
 context, or source reference. Otherwise use "clarification" and ask exactly one
-short question. Never invent a dimension, direction, fitting, flange face,
-branch size, measurement basis, source datum, offset component, or angle. Use
+short question. Never invent a dimension, direction, fitting, branch size,
+measurement basis, source datum, offset component, or angle. Use
 "unsupported" for dialogue, trade Q&A, calculations that do not request a
 drawing change, or operations outside the listed contract.
 
@@ -87,6 +87,13 @@ the word "outlet" by itself replace an Olet fitting; it may describe branch
 size. "From", "off", "starting from", and "measured from" introduce a source
 reference. Flange start/face/end/weld-end, elbow center, tee center, and fitting
 center are measurement datums, not new endpoint fittings.
+
+Raised face is the flange-face default and is not missing information. A weld
+neck with no explicit face is WNRF, and a slip-on with no explicit face is
+SORF. Use WNFF or SOFF only when the user explicitly says flat face or full
+face. A bare "flange" still needs its flange type, but never ask a separate
+face question after the type is known unless the user supplied conflicting
+face language.
 
 Speech recognition may transcribe "to" as "of" or "off" between two named
 fittings. In that fitting-pair position, interpret "X of X" and "X off X" as

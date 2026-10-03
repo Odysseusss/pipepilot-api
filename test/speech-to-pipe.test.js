@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSpeechToPipeHandler } from "../api/app/speech-to-pipe.js";
+import { SPEECH_TO_PIPE_SYSTEM_PROMPT } from "../api/_lib/speech-to-pipe-prompt.js";
 
 const origin = "https://app.pipepilotapp.com";
 const identity = { ok: true, subject: "user-1", email: "pipe@example.com" };
@@ -50,6 +51,15 @@ function fakeStore(overrides = {}) {
     recordOutcome: async () => true, ...overrides,
   };
 }
+
+test("raised face is the default instead of a clarification", () => {
+  const prompt = SPEECH_TO_PIPE_SYSTEM_PROMPT.replace(/\s+/g, " ");
+  assert.match(prompt, /Raised face is the flange-face default/i);
+  assert.match(prompt, /weld neck with no explicit face is WNRF/i);
+  assert.match(prompt, /slip-on with no explicit face is SORF/i);
+  assert.match(prompt, /only when the user explicitly says flat face or full face/i);
+  assert.match(prompt, /bare "flange" still needs its flange type/i);
+});
 
 test("paid submission returns strict operations and records cost telemetry", async () => {
   let completion;
