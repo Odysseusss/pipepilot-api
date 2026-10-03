@@ -103,7 +103,7 @@ export function createSpeechToPipeStore(sql, {
 
     async completeSubmission({
       started, model, reasoningEffort, upstreamRequestId, reply, inputTokens, outputTokens,
-      estimatedCostMicros, latencyMs,
+      estimatedCostMicros, latencyMs, continuityDemoted = false,
     }) {
       const replyJson = JSON.stringify(reply);
       await sql`
@@ -113,7 +113,8 @@ export function createSpeechToPipeStore(sql, {
             upstream_request_id = ${upstreamRequestId},
             input_tokens = ${inputTokens}, output_tokens = ${outputTokens},
             estimated_cost_micros = ${estimatedCostMicros},
-            latency_ms = ${latencyMs}, completed_at = NOW()
+            latency_ms = ${latencyMs}, continuity_demoted = ${continuityDemoted},
+            completed_at = NOW()
         WHERE id = ${started.turnId}
       `;
       await sql`

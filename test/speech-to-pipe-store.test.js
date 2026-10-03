@@ -28,6 +28,10 @@ function fakeSql(entitlement, { requestCount = 1 } = {}) {
     if (text.startsWith("UPDATE speech_to_pipe_assistances")) {
       return [];
     }
+    if (text.startsWith("UPDATE speech_to_pipe_turns") ||
+        text.startsWith("UPDATE speech_to_pipe_daily_usage")) {
+      return [];
+    }
     throw new Error(`Unexpected query: ${text}`);
   };
   return { sql, queries };
@@ -87,4 +91,37 @@ test("paid non-administrator submissions retain the configured daily cap", async
     text.startsWith("INSERT INTO speech_to_pipe_daily_usage"));
   assert.ok(usageQuery);
   assert.match(usageQuery.text, /WHERE speech_to_pipe_daily_usage\.request_count/);
+});
+
+test("continuity demotions are stored separately from the model reply", async () => {
+  const database = fakeSql({
+    tier: "annual_full",
+    status: "complimentary_lifetime",
+    paid_through: null,
+  });
+  const store = createSpeechToPipeStore(database.sql);
+
+  await store.completeSubmission({
+    started: {
+      turnId: 11,
+      accountId: 7,
+      usageDate: "2026-10-03",
+      assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c",
+    },
+    model: "gpt-6-luna",
+    reasoningEffort: "none",
+    upstreamRequestId: "req-1",
+    reply: { status: "clarification" },
+    inputTokens: 10,
+    outputTokens: 5,
+    estimatedCostMicros: 4,
+    latencyMs: 100,
+    continuityDemoted: true,
+  });
+
+  const turnUpdate = database.queries.find(({ text }) =>
+    text.startsWith("UPDATE speech_to_pipe_turns"));
+  assert.ok(turnUpdate);
+  assert.match(turnUpdate.text, /continuity_demoted = \?/);
+  assert.ok(turnUpdate.values.includes(true));
 });

@@ -1,7 +1,11 @@
 import { neon } from "@neondatabase/serverless";
 import { requireVerifiedAccount } from "../_lib/app-auth.js";
 import { appCorsHeaders, appJson, requireAllowedAppOrigin } from "../_lib/app-http.js";
-import { SPEECH_TO_PIPE_RESPONSE_FORMAT, SPEECH_TO_PIPE_SYSTEM_PROMPT } from "../_lib/speech-to-pipe-prompt.js";
+import {
+  SPEECH_TO_PIPE_FITTING_IDS,
+  SPEECH_TO_PIPE_RESPONSE_FORMAT,
+  SPEECH_TO_PIPE_SYSTEM_PROMPT,
+} from "../_lib/speech-to-pipe-prompt.js";
 import { createSpeechToPipeStore } from "../_lib/speech-to-pipe-store.js";
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -12,6 +16,7 @@ const DEFAULT_MODEL = "gpt-6-luna";
 const DEFAULT_REASONING_EFFORT = "none";
 const REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
 const DEFAULT_DAILY_LIMIT = 10;
+const FITTING_IDS = new Set(SPEECH_TO_PIPE_FITTING_IDS);
 const UPSTREAM_TIMEOUT_MS = 20_000;
 const OUTCOMES = new Set([
   "validationRejected", "previewCancelled", "applied",
@@ -137,9 +142,10 @@ export function createSpeechToPipeHandler({
       await safeFail(store, started, model, reasoningEffort, "upstream", `HTTP ${upstreamResponse.status}`, latencyMs);
       return appJson({ error: "Speech-to-Pipe could not interpret that instruction." }, 502, origin);
     }
-    const reply = enforceConversationContinuity(
-      structuredReply(responseText(result)),
-      started,
+    const modelReply = structuredReply(responseText(result));
+    const reply = enforceConversationContinuity(modelReply, started);
+    const continuityDemoted = Boolean(
+      modelReply?.status === "ready" && reply?.status === "clarification",
     );
     if (!reply) {
       await safeFail(store, started, model, reasoningEffort, "structured_output", "Invalid structured response", latencyMs);
@@ -154,6 +160,7 @@ export function createSpeechToPipeHandler({
         started, model, reasoningEffort,
         upstreamRequestId: upstreamResponse.headers.get("x-request-id"),
         reply, inputTokens, outputTokens, estimatedCostMicros, latencyMs,
+        continuityDemoted,
       });
     } catch (error) {
       console.error("Speech-to-Pipe assistance report failed", error instanceof Error ? error.message : error);
@@ -191,16 +198,18 @@ async function recordOutcome({ body, identity, store, origin }) {
 }
 
 function responseInput(body, started) {
-  const originalInstruction = normalizeTradeDefaults(
-    started.originalInstruction ?? body.instruction.trim(),
-  );
+  const originalInstruction = started.originalInstruction ?? body.instruction.trim();
   const instruction = normalizeTradeDefaults(body.instruction.trim());
   return [
-    ...body.history.map(({ role, content }) => ({ role, content })),
+    ...body.history.map(({ role, content }) => ({
+      role,
+      content: role === "user" ? normalizeTradeDefaults(content) : content,
+    })),
     {
       role: "user",
       content: JSON.stringify({
         originalInstruction,
+        normalizedOriginalInstruction: normalizeTradeDefaults(originalInstruction),
         priorFittingRequirements: started.priorRequirements ?? null,
         instruction,
         drawingContext: body.drawingContext ?? null,
@@ -213,11 +222,11 @@ function responseInput(body, started) {
 function normalizeTradeDefaults(value) {
   return value
     .replace(
-      /\b(?:well|weld|welding)\s+neck\b(?!\s+(?:flat|full|raised|raise|raises|race)\s+face\b)/gi,
+      /\b(?:well|weld|welding)\s+neck\b(?![\s,;]+(?:flat|full|raised|raise|raises|race)\s+face\b)/gi,
       "WNRF",
     )
     .replace(
-      /\bslip[ -]?on\b(?!\s+(?:flat|full|raised|raise|raises|race)\s+face\b)/gi,
+      /\bslip[ -]?on\b(?![\s,;]+(?:flat|full|raised|raise|raises|race)\s+face\b)/gi,
       "SORF",
     );
 }
@@ -252,7 +261,8 @@ function structuredReply(value) {
       typeof parsed.message !== "string" || !parsed.message.trim() ||
       !parsed.source || !["default", "selected", "reference"].includes(parsed.source.mode) ||
       !validFittingRequirements(parsed.requirements) ||
-      !Array.isArray(parsed.operations) || parsed.operations.length > 6) return null;
+      !Array.isArray(parsed.operations) || parsed.operations.length > 6 ||
+      !replyUsesKnownFittingIds(parsed)) return null;
   const question = typeof parsed.question === "string" && parsed.question.trim() ? parsed.question.trim() : null;
   if (parsed.status === "ready" && (parsed.operations.length === 0 || question !== null)) return null;
   if (parsed.status === "clarification" && (!question || parsed.operations.length !== 0)) return null;
@@ -266,6 +276,20 @@ function structuredReply(value) {
     requirements: parsed.requirements,
     operations: parsed.operations,
   };
+}
+
+function replyUsesKnownFittingIds(reply) {
+  const values = [
+    reply.source?.fittingType,
+    ...reply.requirements.fittingRoles.map((role) => role.fittingType),
+    ...reply.operations.flatMap((operation) => [
+      operation.fittingType,
+      operation.startFitting,
+      operation.endFitting,
+      operation.referenceFittingType,
+    ]),
+  ];
+  return values.every((value) => value == null || FITTING_IDS.has(value));
 }
 
 function enforceConversationContinuity(reply, started) {

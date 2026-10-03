@@ -1,3 +1,23 @@
+export const SPEECH_TO_PIPE_FITTING_IDS = Object.freeze([
+  "PLAIN_END", "ELBOW_90", "ELBOW_45", "ELBOW_CUSTOM", "TEE",
+  "REDUCING_TEE", "CROSS", "LATERAL", "WELDOLET", "SOCKOLET",
+  "THREADOLET", "WNRF", "WNFF", "SORF", "SOFF", "THRF", "BLIND",
+  "REDUCER", "CONCENTRIC_REDUCER", "ECCENTRIC_REDUCER",
+  "ECCENTRIC_REDUCER_FLAT_TOP", "VALVE", "FLANGED_VALVE", "CAP",
+  "COUPLING", "UNION", "NIPPLE", "THREADED_90", "THREADED_45",
+  "THREADED_TEE", "THREADED_CROSS", "THREADED_PLUG",
+  "THREADED_COUPLING", "THREADED_UNION", "THREADED_HEX_BUSHING",
+  "THREADED_END", "STRAINER", "THREADED_STRAINER", "PSV",
+  "FIELD_WELD", "X_JOINT", "ORIFICE_PLATE", "SPADE", "SPECTACLE_OPEN",
+  "SPECTACLE_CLOSED", "BLANK", "INSULATION_KIT", "GROUNDING_RING",
+  "PIPE_CLASS_LIMIT", "INSTRUMENT", "FLANGED_INSTRUMENT", "FLOW_METER",
+  "PRESSURE_INDICATOR", "PRESSURE_GAUGE", "PRESSURE_TRANSMITTER",
+  "FLOW_INDICATOR", "FLOW_TRANSMITTER", "FLOW_ELEMENT",
+  "TEMPERATURE_INDICATOR", "TEMPERATURE_TRANSMITTER", "LEVEL_INDICATOR",
+  "LEVEL_TRANSMITTER", "UNIVERSAL", "THREADED_UNIVERSAL",
+  "FLANGED_UNIVERSAL",
+]);
+
 export const SPEECH_TO_PIPE_SYSTEM_PROMPT = String.raw`
 You are the language interpreter for Pipe Pilot's Speech-to-Pipe feature. Your
 only job is to convert a spoken or typed pipe-building instruction into the
@@ -64,20 +84,7 @@ Supported operation kinds and required facts:
   selected outlet legally supplies it.
 
 Stable fitting IDs:
-PLAIN_END, ELBOW_90, ELBOW_45, ELBOW_CUSTOM, TEE, REDUCING_TEE,
-CROSS, LATERAL, WELDOLET, SOCKOLET, THREADOLET, WNRF, WNFF, SORF,
-SOFF, THRF, BLIND, REDUCER, CONCENTRIC_REDUCER, ECCENTRIC_REDUCER,
-ECCENTRIC_REDUCER_FLAT_TOP, VALVE, FLANGED_VALVE, CAP, COUPLING,
-UNION, NIPPLE, THREADED_90, THREADED_45, THREADED_TEE,
-THREADED_CROSS, THREADED_PLUG, THREADED_COUPLING, THREADED_UNION,
-THREADED_HEX_BUSHING, THREADED_END, STRAINER, THREADED_STRAINER,
-PSV, FIELD_WELD, X_JOINT, ORIFICE_PLATE, SPADE, SPECTACLE_OPEN,
-SPECTACLE_CLOSED, BLANK, INSULATION_KIT, GROUNDING_RING,
-PIPE_CLASS_LIMIT, INSTRUMENT, FLANGED_INSTRUMENT, FLOW_METER,
-PRESSURE_INDICATOR, PRESSURE_GAUGE, PRESSURE_TRANSMITTER,
-FLOW_INDICATOR, FLOW_TRANSMITTER, FLOW_ELEMENT, TEMPERATURE_INDICATOR,
-TEMPERATURE_TRANSMITTER, LEVEL_INDICATOR, LEVEL_TRANSMITTER, UNIVERSAL,
-THREADED_UNIVERSAL, FLANGED_UNIVERSAL.
+${SPEECH_TO_PIPE_FITTING_IDS.join(", ")}.
 
 Speech equivalences: ninety/90 and forty-five/45 are elbows; weld neck raised
 face, raise face, raises face, or race face means WNRF; weld neck flat face is
@@ -114,6 +121,7 @@ const nullableEnum = (values) => ({
   enum: [null, ...values],
 });
 const nullableDirection = nullableEnum(["up", "down", "north", "east", "south", "west"]);
+const nullableFittingId = nullableEnum(SPEECH_TO_PIPE_FITTING_IDS);
 
 const fittingRequirements = {
   type: "object",
@@ -131,7 +139,7 @@ const fittingRequirements = {
             type: "string",
             enum: ["start", "end", "fitting", "source", "reference"],
           },
-          fittingType: nullableString,
+          fittingType: nullableFittingId,
         },
         required: ["operationIndex", "role", "fittingType"],
       },
@@ -156,7 +164,7 @@ export const SPEECH_TO_PIPE_RESPONSE_FORMAT = {
         additionalProperties: false,
         properties: {
           mode: { type: "string", enum: ["default", "selected", "reference"] },
-          fittingType: nullableString,
+          fittingType: nullableFittingId,
           position: nullableEnum(["upper", "lower", "left", "right", "north", "south", "east", "west"]),
         },
         required: ["mode", "fittingType", "position"],
@@ -171,10 +179,10 @@ export const SPEECH_TO_PIPE_RESPONSE_FORMAT = {
           properties: {
             kind: { type: "string", enum: ["run", "fitting", "attachment", "inline_fitting", "planar_offset", "rolled_offset", "double_ninety", "assembly", "continuation"] },
             direction: nullableDirection, lengthSixteenths: nullableInteger,
-            fittingType: nullableString, startFitting: nullableString,
-            endFitting: nullableString,
+            fittingType: nullableFittingId, startFitting: nullableFittingId,
+            endFitting: nullableFittingId,
             measurementBasis: nullableEnum(["center_to_center", "end_to_center", "end_to_end"]),
-            outletSize: nullableNumber, referenceFittingType: nullableString,
+            outletSize: nullableNumber, referenceFittingType: nullableFittingId,
             referencePosition: nullableEnum(["upper", "lower", "left", "right", "north", "south", "east", "west"]),
             horizontalDirection: nullableDirection,
             verticalDirection: nullableDirection, runSixteenths: nullableInteger,

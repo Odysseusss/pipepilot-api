@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSpeechToPipeHandler } from "../api/app/speech-to-pipe.js";
-import { SPEECH_TO_PIPE_SYSTEM_PROMPT } from "../api/_lib/speech-to-pipe-prompt.js";
+import {
+  SPEECH_TO_PIPE_FITTING_IDS,
+  SPEECH_TO_PIPE_RESPONSE_FORMAT,
+  SPEECH_TO_PIPE_SYSTEM_PROMPT,
+} from "../api/_lib/speech-to-pipe-prompt.js";
 
 const origin = "https://app.pipepilotapp.com";
 const identity = { ok: true, subject: "user-1", email: "pipe@example.com" };
@@ -61,6 +65,22 @@ test("raised face is the default instead of a clarification", () => {
   assert.match(prompt, /bare "flange" still needs its flange type/i);
 });
 
+test("every structured fitting field is constrained to the shared catalog", () => {
+  const schema = SPEECH_TO_PIPE_RESPONSE_FORMAT.schema;
+  const expected = [null, ...SPEECH_TO_PIPE_FITTING_IDS];
+  assert.deepEqual(
+    schema.properties.source.properties.fittingType.enum,
+    expected,
+  );
+  assert.deepEqual(
+    schema.properties.requirements.properties.fittingRoles.items.properties.fittingType.enum,
+    expected,
+  );
+  for (const field of ["fittingType", "startFitting", "endFitting", "referenceFittingType"]) {
+    assert.deepEqual(schema.properties.operations.items.properties[field].enum, expected, field);
+  }
+});
+
 test("spoken flange types are normalized to raised face before interpretation", async () => {
   let upstreamBody;
   const handler = createSpeechToPipeHandler({
@@ -78,6 +98,7 @@ test("spoken flange types are normalized to raised face before interpretation", 
 
   const response = await handler(request(interpretBody({
     instruction: "Well neck to weld neck 85 inches and end running south",
+    history: [{ role: "user", content: "slip on to well neck" }],
   })));
 
   assert.equal(response.status, 200);
@@ -86,6 +107,15 @@ test("spoken flange types are normalized to raised face before interpretation", 
     modelInput.instruction,
     "WNRF to WNRF 85 inches and end running south",
   );
+  assert.equal(
+    modelInput.originalInstruction,
+    "Well neck to weld neck 85 inches and end running south",
+  );
+  assert.equal(
+    modelInput.normalizedOriginalInstruction,
+    "WNRF to WNRF 85 inches and end running south",
+  );
+  assert.equal(upstreamBody.input[0].content, "SORF to WNRF");
 });
 
 test("explicit flat-face flange language overrides the raised-face default", async () => {
@@ -104,14 +134,49 @@ test("explicit flat-face flange language overrides the raised-face default", asy
   });
 
   await handler(request(interpretBody({
-    instruction: "weld neck flat face to slip on full face 8 feet end to end north",
+    instruction: "weld neck, flat face to slip on; full face 8 feet end to end north",
   })));
 
   const modelInput = JSON.parse(upstreamBody.input.at(-1).content);
   assert.equal(
     modelInput.instruction,
-    "weld neck flat face to slip on full face 8 feet end to end north",
+    "weld neck, flat face to slip on; full face 8 feet end to end north",
   );
+});
+
+test("off-catalog fitting IDs are rejected at the API boundary", async () => {
+  const hallucinated = readyPlan();
+  hallucinated.requirements.fittingRoles[0].fittingType = "WELD_NECK_FLANGE";
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(hallucinated),
+    }), { status: 200 }),
+  });
+
+  const response = await handler(request(interpretBody()));
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /invalid plan/i);
+});
+
+test("malformed operations are rejected without throwing", async () => {
+  const malformed = { ...readyPlan(), operations: null };
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(malformed),
+    }), { status: 200 }),
+  });
+
+  const response = await handler(request(interpretBody()));
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /invalid plan/i);
 });
 
 test("paid submission returns strict operations and records cost telemetry", async () => {
@@ -224,6 +289,7 @@ test("missing facts return one clarification and no operations", async () => {
 
 test("clarification cannot erase an explicitly requested fitting pair", async () => {
   let upstreamBody;
+  let completion;
   const bareRun = {
     ...readyPlan(),
     message: "Ready to preview an 8 ft north run from a WNRF flange end.",
@@ -250,6 +316,7 @@ test("clarification cannot erase an explicitly requested fitting pair", async ()
           { operationIndex: 0, role: "end", fittingType: null },
         ] },
       }),
+      completeSubmission: async (value) => { completion = value; },
     }),
     fetcher: async (_url, options) => {
       upstreamBody = JSON.parse(options.body);
@@ -280,6 +347,7 @@ test("clarification cannot erase an explicitly requested fitting pair", async ()
   );
   assert.equal(currentTurn.priorFittingRequirements.fittingRoles.length, 2);
   assert.deepEqual(body.operations, []);
+  assert.equal(completion.continuityDemoted, true);
 });
 
 test("clarification preserves a resolved flange-to-flange assembly", async () => {
