@@ -248,7 +248,10 @@ function normalizeTradeDefaults(value) {
       /\bslip[ -]?on\b(?![\s,;]+(?:flat|full|raised|raise|raises|race)\s+face\b)/gi,
       "SORF",
     )
-    .replace(/\band\s+(?:(?:the|a)\s+)?cent(?:er|re)\b/gi, "end to center")
+    .replace(
+      /\band\s+(?:(?:the|a|to)\s+)?cent(?:er|re)\b/gi,
+      "end to center",
+    )
     .replace(/\band\s+(?:to\s+)?end\b/gi, "end to end");
 }
 

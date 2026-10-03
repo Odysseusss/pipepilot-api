@@ -64,6 +64,7 @@ test("raised face is the default instead of a clarification", () => {
   assert.match(prompt, /only when the user explicitly says flat face or full face/i);
   assert.match(prompt, /bare "flange" still needs its flange type/i);
   assert.match(prompt, /"and the centre".*means end-to-center/i);
+  assert.match(prompt, /"and to centre".*means end-to-center/i);
 });
 
 test("every structured fitting field is constrained to the shared catalog", () => {
@@ -218,6 +219,32 @@ test("exact weld-neck to 90 center utterance is one ready assembly", async () =>
   assert.equal(body.operations[0].startFitting, "WNRF");
   assert.equal(body.operations[0].endFitting, "ELBOW_90");
   assert.equal(body.operations[0].measurementBasis, "end_to_center");
+});
+
+test("Safari and-to-centre transcript normalizes to end-to-center", async () => {
+  let upstreamBody;
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(readyPlan()) }), {
+        status: 200,
+      });
+    },
+  });
+
+  await handler(request(interpretBody({
+    instruction: "Weld neck flange to 90 running south 9 foot 6 3/8 and to centre",
+  })));
+
+  const modelInput = JSON.parse(upstreamBody.input[0].content);
+  assert.equal(
+    modelInput.instruction,
+    "WNRF flange to 90 running south 9 foot 6 3/8 end to center",
+  );
 });
 
 test("paid submission returns strict operations and records cost telemetry", async () => {
