@@ -106,15 +106,18 @@ export function createSpeechToPipeStore(sql, {
       estimatedCostMicros, latencyMs, continuityDemoted = false,
     }) {
       const replyJson = JSON.stringify(reply);
+      const storedReplyJson = JSON.stringify({
+        ...reply,
+        telemetry: { continuityDemoted },
+      });
       await sql`
         UPDATE speech_to_pipe_turns
-        SET response_payload = ${replyJson}::jsonb, model = ${model},
+        SET response_payload = ${storedReplyJson}::jsonb, model = ${model},
             reasoning_effort = ${reasoningEffort},
             upstream_request_id = ${upstreamRequestId},
             input_tokens = ${inputTokens}, output_tokens = ${outputTokens},
             estimated_cost_micros = ${estimatedCostMicros},
-            latency_ms = ${latencyMs}, continuity_demoted = ${continuityDemoted},
-            completed_at = NOW()
+            latency_ms = ${latencyMs}, completed_at = NOW()
         WHERE id = ${started.turnId}
       `;
       await sql`

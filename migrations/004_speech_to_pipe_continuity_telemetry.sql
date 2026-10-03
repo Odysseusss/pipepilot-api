@@ -1,6 +1,0 @@
-BEGIN;
-
-ALTER TABLE speech_to_pipe_turns
-  ADD COLUMN IF NOT EXISTS continuity_demoted BOOLEAN NOT NULL DEFAULT FALSE;
-
-COMMIT;

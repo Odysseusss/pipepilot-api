@@ -122,6 +122,7 @@ test("continuity demotions are stored separately from the model reply", async ()
   const turnUpdate = database.queries.find(({ text }) =>
     text.startsWith("UPDATE speech_to_pipe_turns"));
   assert.ok(turnUpdate);
-  assert.match(turnUpdate.text, /continuity_demoted = \?/);
-  assert.ok(turnUpdate.values.includes(true));
+  const storedReply = JSON.parse(turnUpdate.values[0]);
+  assert.deepEqual(storedReply.telemetry, { continuityDemoted: true });
+  assert.doesNotMatch(turnUpdate.text, /continuity_demoted/);
 });
