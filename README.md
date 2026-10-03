@@ -41,6 +41,19 @@ Configure `OPENAI_API_KEY` in Vercel. `PETEY_MODEL` defaults to
 origins and private-network HTTP origins used for device testing are accepted
 by default. Environment-variable changes require a new deployment.
 
+## Speech-to-Pipe beta
+
+`POST /api/app/speech-to-pipe` is the authenticated paid interpretation route.
+It defaults to `gpt-6-luna` with reasoning disabled, asks the model only for a
+strict drawing-operation schema, and leaves compatibility, catalog lookup,
+geometry, preview, and undo to Pipe Pilot.
+
+Configure `OPENAI_API_KEY`, `SPEECH_TO_PIPE_MODEL`,
+`SPEECH_TO_PIPE_REASONING_EFFORT`, and `SPEECH_TO_PIPE_DAILY_LIMIT` in Vercel.
+The model defaults to `gpt-6-luna`, reasoning defaults to `none`, and the daily
+allowance defaults to 10 paid-account submissions. Apply migration 003 before
+deploying this route.
+
 The checkout route expects:
 
 ```json

@@ -1,0 +1,518 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createSpeechToPipeHandler } from "../api/app/speech-to-pipe.js";
+import {
+  SPEECH_TO_PIPE_FITTING_IDS,
+  SPEECH_TO_PIPE_RESPONSE_FORMAT,
+  SPEECH_TO_PIPE_SYSTEM_PROMPT,
+} from "../api/_lib/speech-to-pipe-prompt.js";
+
+const origin = "https://app.pipepilotapp.com";
+const identity = { ok: true, subject: "user-1", email: "pipe@example.com" };
+
+function request(body) {
+  return new Request("https://pipepilot-api.vercel.app/api/app/speech-to-pipe", {
+    method: "POST",
+    headers: { origin, authorization: "Bearer token", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function interpretBody(overrides = {}) {
+  return {
+    version: 1, mode: "interpret",
+    instruction: "90 to 90, 36 inches center to center, north",
+    history: [], drawingContext: { runCount: 0 }, selection: null,
+    assistanceId: null, correctionOf: null, ...overrides,
+  };
+}
+
+function readyPlan() {
+  const empty = {
+    direction: null, lengthSixteenths: null, fittingType: null,
+    startFitting: null, endFitting: null, measurementBasis: null,
+    outletSize: null, referenceFittingType: null, referencePosition: null,
+    horizontalDirection: null, verticalDirection: null, runSixteenths: null,
+    riseSixteenths: null, travelSixteenths: null, angleDegrees: null,
+    firstHorizontal: null, secondHorizontal: null, offsetSixteenths: null,
+    gasketTreatment: null, gasketThickness: null, endTeeTopology: null,
+  };
+  return {
+    status: "ready", message: "Ready to preview.", question: null,
+    source: { mode: "default", fittingType: null, position: null },
+    requirements: { fittingRoles: [
+      { operationIndex: 0, role: "start", fittingType: "ELBOW_90" },
+      { operationIndex: 0, role: "end", fittingType: "ELBOW_90" },
+    ] },
+    operations: [{ ...empty, kind: "double_ninety", direction: "north", lengthSixteenths: 576 }],
+  };
+}
+
+function fakeStore(overrides = {}) {
+  return {
+    startSubmission: async () => ({ allowed: true, accountId: 1, assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c", turnId: 2, usageDate: "2026-10-01", remaining: 9 }),
+    completeSubmission: async () => {}, failSubmission: async () => {},
+    recordOutcome: async () => true, ...overrides,
+  };
+}
+
+test("raised face is the default instead of a clarification", () => {
+  const prompt = SPEECH_TO_PIPE_SYSTEM_PROMPT.replace(/\s+/g, " ");
+  assert.match(prompt, /Raised face is the flange-face default/i);
+  assert.match(prompt, /weld neck with no explicit face is WNRF/i);
+  assert.match(prompt, /slip-on with no explicit face is SORF/i);
+  assert.match(prompt, /only when the user explicitly says flat face or full face/i);
+  assert.match(prompt, /bare "flange" still needs its flange type/i);
+  assert.match(prompt, /"and the centre".*means end-to-center/i);
+  assert.match(prompt, /"and to centre".*means end-to-center/i);
+});
+
+test("every structured fitting field is constrained to the shared catalog", () => {
+  const schema = SPEECH_TO_PIPE_RESPONSE_FORMAT.schema;
+  const expected = [null, ...SPEECH_TO_PIPE_FITTING_IDS];
+  assert.deepEqual(
+    schema.properties.source.properties.fittingType.enum,
+    expected,
+  );
+  assert.deepEqual(
+    schema.properties.requirements.properties.fittingRoles.items.properties.fittingType.enum,
+    expected,
+  );
+  for (const field of ["fittingType", "startFitting", "endFitting", "referenceFittingType"]) {
+    assert.deepEqual(schema.properties.operations.items.properties[field].enum, expected, field);
+  }
+});
+
+test("spoken flange types are normalized to raised face before interpretation", async () => {
+  let upstreamBody;
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(readyPlan()) }), {
+        status: 200,
+      });
+    },
+  });
+
+  const response = await handler(request(interpretBody({
+    instruction: "Well neck to weld neck 85 inches and end running south",
+  })));
+
+  assert.equal(response.status, 200);
+  const modelInput = JSON.parse(upstreamBody.input.at(-1).content);
+  assert.equal(
+    modelInput.instruction,
+    "WNRF to WNRF 85 inches end to end running south",
+  );
+  assert.equal(Object.hasOwn(modelInput, "originalInstruction"), false);
+  assert.equal(Object.hasOwn(modelInput, "normalizedOriginalInstruction"), false);
+  assert.equal(upstreamBody.input.length, 1);
+});
+
+test("explicit flat-face flange language overrides the raised-face default", async () => {
+  let upstreamBody;
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(readyPlan()) }), {
+        status: 200,
+      });
+    },
+  });
+
+  await handler(request(interpretBody({
+    instruction: "weld neck, flat face to slip on; full face 8 feet end to end north",
+  })));
+
+  const modelInput = JSON.parse(upstreamBody.input.at(-1).content);
+  assert.equal(
+    modelInput.instruction,
+    "weld neck, flat face to slip on; full face 8 feet end to end north",
+  );
+});
+
+test("off-catalog fitting IDs are rejected at the API boundary", async () => {
+  const hallucinated = readyPlan();
+  hallucinated.requirements.fittingRoles[0].fittingType = "WELD_NECK_FLANGE";
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(hallucinated),
+    }), { status: 200 }),
+  });
+
+  const response = await handler(request(interpretBody()));
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /invalid plan/i);
+});
+
+test("malformed operations are rejected without throwing", async () => {
+  const malformed = { ...readyPlan(), operations: null };
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(malformed),
+    }), { status: 200 }),
+  });
+
+  const response = await handler(request(interpretBody()));
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /invalid plan/i);
+});
+
+test("exact weld-neck to 90 center utterance is one ready assembly", async () => {
+  let upstreamBody;
+  const plan = readyPlan();
+  plan.message = "Ready to preview the WNRF to 90 assembly.";
+  plan.requirements = { fittingRoles: [
+    { operationIndex: 0, role: "start", fittingType: "WNRF" },
+    { operationIndex: 0, role: "end", fittingType: "ELBOW_90" },
+  ] };
+  plan.operations = [{
+    ...plan.operations[0],
+    kind: "assembly",
+    direction: "north",
+    lengthSixteenths: 870,
+    startFitting: "WNRF",
+    endFitting: "ELBOW_90",
+    measurementBasis: "end_to_center",
+  }];
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(plan) }), {
+        status: 200,
+      });
+    },
+  });
+
+  const response = await handler(request(interpretBody({
+    instruction: "Weld neck to 90 running north 4 foot 6 3/8 and the centre",
+  })));
+  const body = await response.json();
+  const modelInput = JSON.parse(upstreamBody.input[0].content);
+
+  assert.equal(
+    modelInput.instruction,
+    "WNRF to 90 running north 4 foot 6 3/8 end to center",
+  );
+  assert.equal(body.status, "ready");
+  assert.equal(body.question, null);
+  assert.equal(body.operations[0].startFitting, "WNRF");
+  assert.equal(body.operations[0].endFitting, "ELBOW_90");
+  assert.equal(body.operations[0].measurementBasis, "end_to_center");
+});
+
+test("Safari and-to-centre transcript normalizes to end-to-center", async () => {
+  let upstreamBody;
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(readyPlan()) }), {
+        status: 200,
+      });
+    },
+  });
+
+  await handler(request(interpretBody({
+    instruction: "Weld neck flange to 90 running south 9 foot 6 3/8 and to centre",
+  })));
+
+  const modelInput = JSON.parse(upstreamBody.input[0].content);
+  assert.equal(
+    modelInput.instruction,
+    "WNRF flange to 90 running south 9 foot 6 3/8 end to center",
+  );
+});
+
+test("paid submission returns strict operations and records cost telemetry", async () => {
+  let completion;
+  let upstreamBody;
+  const store = fakeStore({ completeSubmission: async (value) => { completion = value; } });
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key", SPEECH_TO_PIPE_MODEL: "gpt-6-luna" },
+    verifier: async () => identity, store,
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(readyPlan()), usage: { input_tokens: 100, output_tokens: 40 } }), {
+        status: 200, headers: { "content-type": "application/json", "x-request-id": "req-1" },
+      });
+    },
+  });
+
+  const response = await handler(request(interpretBody()));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.status, "ready");
+  assert.equal(body.remainingRequests, 9);
+  assert.equal(body.unlimitedRequests, false);
+  assert.equal(body.operations[0].kind, "double_ninety");
+  assert.equal(upstreamBody.model, "gpt-6-luna");
+  assert.equal(upstreamBody.reasoning.effort, "none");
+  assert.equal(upstreamBody.store, false);
+  assert.equal(upstreamBody.text.format.strict, true);
+  assert.equal(completion.inputTokens, 100);
+  assert.equal(completion.outputTokens, 40);
+  assert.equal(completion.reasoningEffort, "none");
+  assert.equal(completion.estimatedCostMicros, 30);
+});
+
+test("administrator submission reports unlimited requests", async () => {
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore({
+      startSubmission: async () => ({
+        allowed: true,
+        accountId: 1,
+        assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c",
+        turnId: 2,
+        usageDate: "2026-10-01",
+        remaining: null,
+        unlimited: true,
+      }),
+    }),
+    fetcher: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(readyPlan()),
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }), { status: 200 }),
+  });
+
+  const response = await handler(request(interpretBody()));
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.remainingRequests, null);
+  assert.equal(body.unlimitedRequests, true);
+});
+
+test("free accounts are rejected before an OpenAI call", async () => {
+  let fetched = false;
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
+    store: fakeStore({ startSubmission: async () => ({ allowed: false, reason: "paid" }) }),
+    fetcher: async () => { fetched = true; return new Response(); },
+  });
+  const response = await handler(request(interpretBody()));
+  assert.equal(response.status, 403);
+  assert.equal(fetched, false);
+});
+
+test("daily allowance is rejected before an OpenAI call", async () => {
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key", SPEECH_TO_PIPE_DAILY_LIMIT: "10" },
+    verifier: async () => identity,
+    store: fakeStore({ startSubmission: async () => ({ allowed: false, reason: "quota" }) }),
+  });
+  const response = await handler(request(interpretBody()));
+  assert.equal(response.status, 429);
+  assert.match((await response.json()).error, /10 submissions/);
+});
+
+test("missing facts return one clarification and no operations", async () => {
+  const clarification = {
+    status: "clarification", message: "Direction required.",
+    question: "Which direction does the spool run?",
+    source: { mode: "default", fittingType: null, position: null },
+    requirements: { fittingRoles: [
+      { operationIndex: 0, role: "start", fittingType: "ELBOW_90" },
+      { operationIndex: 0, role: "end", fittingType: "ELBOW_90" },
+    ] },
+    operations: [],
+  };
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
+    store: fakeStore(),
+    fetcher: async () => new Response(JSON.stringify({ output_text: JSON.stringify(clarification) }), { status: 200 }),
+  });
+  const response = await handler(request(interpretBody({ instruction: "90 to 90 at 36 inch centers" })));
+  const body = await response.json();
+  assert.equal(body.status, "clarification");
+  assert.equal(body.question, "Which direction does the spool run?");
+  assert.deepEqual(body.operations, []);
+});
+
+test("clarification cannot erase an explicitly requested fitting pair", async () => {
+  let upstreamBody;
+  let completion;
+  const bareRun = {
+    ...readyPlan(),
+    message: "Ready to preview an 8 ft north run from a WNRF flange end.",
+    requirements: { fittingRoles: [
+      { operationIndex: 0, role: "start", fittingType: "WNRF" },
+    ] },
+    operations: [{
+      ...readyPlan().operations[0],
+      kind: "run",
+      direction: "north",
+      lengthSixteenths: 8 * 12 * 16,
+    }],
+  };
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
+    store: fakeStore({
+      startSubmission: async () => ({
+        allowed: true, accountId: 1,
+        assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c",
+        turnId: 2, usageDate: "2026-10-01", remaining: 8,
+        originalInstruction: "Flange of flange 8 foot and end running north",
+        priorRequirements: { fittingRoles: [
+          { operationIndex: 0, role: "start", fittingType: null },
+          { operationIndex: 0, role: "end", fittingType: null },
+        ] },
+      }),
+      completeSubmission: async (value) => { completion = value; },
+    }),
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        output_text: JSON.stringify(bareRun),
+      }), { status: 200 });
+    },
+  });
+  const response = await handler(request(interpretBody({
+    instruction: "wnrf",
+    history: [
+      { role: "user", content: "Flange of flange 8 foot and end running north" },
+      { role: "assistant", content: "Which flange type should start the run?" },
+    ],
+  })));
+  const body = await response.json();
+
+  assert.equal(body.status, "clarification");
+  assert.match(body.question, /end/i);
+  assert.deepEqual(body.requirements.fittingRoles, [
+    { operationIndex: 0, role: "start", fittingType: "WNRF" },
+    { operationIndex: 0, role: "end", fittingType: null },
+  ]);
+  const currentTurn = JSON.parse(upstreamBody.input.at(-1).content);
+  assert.equal(
+    currentTurn.instruction,
+    "Flange of flange 8 foot end to end running north\n" +
+      "For the clarification \"Which flange type should start the run?\", " +
+      "the user answered: wnrf.",
+  );
+  assert.equal(currentTurn.priorFittingRequirements.fittingRoles.length, 2);
+  assert.deepEqual(body.operations, []);
+  assert.equal(completion.continuityDemoted, true);
+});
+
+test("clarification preserves a resolved flange-to-flange assembly", async () => {
+  const assembly = {
+    ...readyPlan(),
+    message: "Ready to preview the WNRF spool.",
+    requirements: { fittingRoles: [
+      { operationIndex: 0, role: "start", fittingType: "WNRF" },
+      { operationIndex: 0, role: "end", fittingType: "WNRF" },
+    ] },
+    operations: [{
+      ...readyPlan().operations[0],
+      kind: "assembly",
+      direction: "north",
+      lengthSixteenths: 8 * 12 * 16,
+      startFitting: "WNRF",
+      endFitting: "WNRF",
+      measurementBasis: "end_to_end",
+    }],
+  };
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
+    store: fakeStore(),
+    fetcher: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify(assembly),
+    }), { status: 200 }),
+  });
+  const response = await handler(request(interpretBody({
+    instruction: "wnrf for both",
+    history: [
+      { role: "user", content: "flange to flange 8 feet end to end north" },
+      { role: "assistant", content: "Which flange type is used at both ends?" },
+    ],
+  })));
+  const body = await response.json();
+
+  assert.equal(body.status, "ready");
+  assert.equal(body.operations[0].kind, "assembly");
+  assert.equal(body.operations[0].startFitting, "WNRF");
+  assert.equal(body.operations[0].endFitting, "WNRF");
+});
+
+test("continuity ledger protects every fitting role without type-specific rules", async () => {
+  const droppedReducer = {
+    ...readyPlan(),
+    requirements: { fittingRoles: [] },
+    operations: [{
+      ...readyPlan().operations[0], kind: "run", direction: "east",
+      lengthSixteenths: 48 * 16,
+    }],
+  };
+  const protectedTypes = ["TEE", "CONCENTRIC_REDUCER", "VALVE", "STRAINER"];
+  for (const fittingType of protectedTypes) {
+    const handler = createSpeechToPipeHandler({
+      environment: { OPENAI_API_KEY: "key" }, verifier: async () => identity,
+      rateLimiter: { allow: () => true },
+      store: fakeStore({
+        startSubmission: async () => ({
+          allowed: true, accountId: 1,
+          assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c",
+          turnId: 2, usageDate: "2026-10-01", remaining: 8,
+          originalInstruction: `90 to ${fittingType} four feet east`,
+          priorRequirements: { fittingRoles: [
+            { operationIndex: 0, role: "start", fittingType: "ELBOW_90" },
+            { operationIndex: 0, role: "end", fittingType },
+          ] },
+        }),
+      }),
+      fetcher: async () => new Response(JSON.stringify({
+        output_text: JSON.stringify(droppedReducer),
+      }), { status: 200 }),
+    });
+    const response = await handler(request(interpretBody({ instruction: "yes" })));
+    const body = await response.json();
+    assert.equal(body.status, "clarification", fittingType);
+    assert.deepEqual(body.requirements.fittingRoles, [
+      { operationIndex: 0, role: "start", fittingType: "ELBOW_90" },
+      { operationIndex: 0, role: "end", fittingType },
+    ], fittingType);
+  }
+});
+
+test("drawing outcomes are attached to the assistance report", async () => {
+  let recorded;
+  const handler = createSpeechToPipeHandler({
+    verifier: async () => identity,
+    store: fakeStore({ recordOutcome: async (value) => { recorded = value; return true; } }),
+  });
+  const response = await handler(request({
+    version: 1, mode: "outcome",
+    assistanceId: "4b38f80d-8680-45cd-a5ae-2cbdd2453d8c",
+    outcome: "applied", stage: "execution", message: null,
+    steps: ["two 90s, 36 inches north"],
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(recorded.outcome, "applied");
+  assert.equal(recorded.identity.subject, "user-1");
+});
