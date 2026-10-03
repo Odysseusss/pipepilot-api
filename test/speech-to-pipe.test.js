@@ -63,6 +63,7 @@ test("raised face is the default instead of a clarification", () => {
   assert.match(prompt, /slip-on with no explicit face is SORF/i);
   assert.match(prompt, /only when the user explicitly says flat face or full face/i);
   assert.match(prompt, /bare "flange" still needs its flange type/i);
+  assert.match(prompt, /"and the centre".*means end-to-center/i);
 });
 
 test("every structured fitting field is constrained to the shared catalog", () => {
@@ -98,24 +99,17 @@ test("spoken flange types are normalized to raised face before interpretation", 
 
   const response = await handler(request(interpretBody({
     instruction: "Well neck to weld neck 85 inches and end running south",
-    history: [{ role: "user", content: "slip on to well neck" }],
   })));
 
   assert.equal(response.status, 200);
   const modelInput = JSON.parse(upstreamBody.input.at(-1).content);
   assert.equal(
     modelInput.instruction,
-    "WNRF to WNRF 85 inches and end running south",
+    "WNRF to WNRF 85 inches end to end running south",
   );
-  assert.equal(
-    modelInput.originalInstruction,
-    "Well neck to weld neck 85 inches and end running south",
-  );
-  assert.equal(
-    modelInput.normalizedOriginalInstruction,
-    "WNRF to WNRF 85 inches and end running south",
-  );
-  assert.equal(upstreamBody.input[0].content, "SORF to WNRF");
+  assert.equal(Object.hasOwn(modelInput, "originalInstruction"), false);
+  assert.equal(Object.hasOwn(modelInput, "normalizedOriginalInstruction"), false);
+  assert.equal(upstreamBody.input.length, 1);
 });
 
 test("explicit flat-face flange language overrides the raised-face default", async () => {
@@ -177,6 +171,53 @@ test("malformed operations are rejected without throwing", async () => {
   const response = await handler(request(interpretBody()));
   assert.equal(response.status, 502);
   assert.match((await response.json()).error, /invalid plan/i);
+});
+
+test("exact weld-neck to 90 center utterance is one ready assembly", async () => {
+  let upstreamBody;
+  const plan = readyPlan();
+  plan.message = "Ready to preview the WNRF to 90 assembly.";
+  plan.requirements = { fittingRoles: [
+    { operationIndex: 0, role: "start", fittingType: "WNRF" },
+    { operationIndex: 0, role: "end", fittingType: "ELBOW_90" },
+  ] };
+  plan.operations = [{
+    ...plan.operations[0],
+    kind: "assembly",
+    direction: "north",
+    lengthSixteenths: 870,
+    startFitting: "WNRF",
+    endFitting: "ELBOW_90",
+    measurementBasis: "end_to_center",
+  }];
+  const handler = createSpeechToPipeHandler({
+    environment: { OPENAI_API_KEY: "key" },
+    verifier: async () => identity,
+    store: fakeStore(),
+    rateLimiter: { allow: () => true },
+    fetcher: async (_url, options) => {
+      upstreamBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ output_text: JSON.stringify(plan) }), {
+        status: 200,
+      });
+    },
+  });
+
+  const response = await handler(request(interpretBody({
+    instruction: "Weld neck to 90 running north 4 foot 6 3/8 and the centre",
+  })));
+  const body = await response.json();
+  const modelInput = JSON.parse(upstreamBody.input[0].content);
+
+  assert.equal(
+    modelInput.instruction,
+    "WNRF to 90 running north 4 foot 6 3/8 end to center",
+  );
+  assert.equal(body.status, "ready");
+  assert.equal(body.question, null);
+  assert.equal(body.operations[0].startFitting, "WNRF");
+  assert.equal(body.operations[0].endFitting, "ELBOW_90");
+  assert.equal(body.operations[0].measurementBasis, "end_to_center");
 });
 
 test("paid submission returns strict operations and records cost telemetry", async () => {
@@ -342,8 +383,10 @@ test("clarification cannot erase an explicitly requested fitting pair", async ()
   ]);
   const currentTurn = JSON.parse(upstreamBody.input.at(-1).content);
   assert.equal(
-    currentTurn.originalInstruction,
-    "Flange of flange 8 foot and end running north",
+    currentTurn.instruction,
+    "Flange of flange 8 foot end to end running north\n" +
+      "For the clarification \"Which flange type should start the run?\", " +
+      "the user answered: wnrf.",
   );
   assert.equal(currentTurn.priorFittingRequirements.fittingRoles.length, 2);
   assert.deepEqual(body.operations, []);

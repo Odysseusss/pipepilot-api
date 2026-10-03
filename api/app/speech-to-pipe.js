@@ -198,25 +198,44 @@ async function recordOutcome({ body, identity, store, origin }) {
 }
 
 function responseInput(body, started) {
-  const originalInstruction = started.originalInstruction ?? body.instruction.trim();
-  const instruction = normalizeTradeDefaults(body.instruction.trim());
-  return [
-    ...body.history.map(({ role, content }) => ({
-      role,
-      content: role === "user" ? normalizeTradeDefaults(content) : content,
-    })),
-    {
-      role: "user",
-      content: JSON.stringify({
-        originalInstruction,
-        normalizedOriginalInstruction: normalizeTradeDefaults(originalInstruction),
-        priorFittingRequirements: started.priorRequirements ?? null,
-        instruction,
-        drawingContext: body.drawingContext ?? null,
-        selection: body.selection ?? null,
-      }),
-    },
-  ];
+  return [{
+    role: "user",
+    content: JSON.stringify({
+      instruction: authoritativeInstruction(body, started),
+      priorFittingRequirements: started.priorRequirements ?? null,
+      drawingContext: body.drawingContext ?? null,
+      selection: body.selection ?? null,
+    }),
+  }];
+}
+
+function authoritativeInstruction(body, started) {
+  const original = normalizeTradeDefaults(
+    started.originalInstruction ?? body.instruction.trim(),
+  );
+  const parts = [original];
+  const seenUserStatements = new Set([original]);
+  let pendingQuestion = null;
+  for (const item of body.history) {
+    if (item.role === "assistant") {
+      pendingQuestion = item.content.trim();
+      continue;
+    }
+    const answer = normalizeTradeDefaults(item.content.trim());
+    if (!answer || seenUserStatements.has(answer)) continue;
+    parts.push(pendingQuestion
+      ? `For the clarification "${pendingQuestion}", the user answered: ${answer}.`
+      : answer);
+    seenUserStatements.add(answer);
+    pendingQuestion = null;
+  }
+  const current = normalizeTradeDefaults(body.instruction.trim());
+  if (current && !seenUserStatements.has(current)) {
+    parts.push(pendingQuestion
+      ? `For the clarification "${pendingQuestion}", the user answered: ${current}.`
+      : current);
+  }
+  return parts.join("\n");
 }
 
 function normalizeTradeDefaults(value) {
@@ -228,7 +247,9 @@ function normalizeTradeDefaults(value) {
     .replace(
       /\bslip[ -]?on\b(?![\s,;]+(?:flat|full|raised|raise|raises|race)\s+face\b)/gi,
       "SORF",
-    );
+    )
+    .replace(/\band\s+(?:(?:the|a)\s+)?cent(?:er|re)\b/gi, "end to center")
+    .replace(/\band\s+(?:to\s+)?end\b/gi, "end to end");
 }
 
 function validInterpretRequest(body) {
