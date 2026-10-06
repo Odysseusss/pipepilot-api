@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createVoiceCommandHandler } from '../api/voice-command.mjs';
+import {
+  createFixedWindowRateLimiter,
+  createVoiceCommandHandler,
+} from '../api/voice-command.mjs';
 
 const previewOrigin =
   'https://pipepilot-app-git-codex-voice-command-service-pipe-pilot.vercel.app';
@@ -101,4 +104,27 @@ test('rejects malformed audio before calling upstream', async () => {
 
   assert.equal(result.statusCode, 400);
   assert.equal(called, false);
+});
+
+test('rate limits repeated voice requests before calling upstream again', async () => {
+  let called = 0;
+  const handler = createVoiceCommandHandler({
+    environment: { OPENAI_API_KEY: 'test-key' },
+    fetcher: async () => {
+      called += 1;
+      return new Response(JSON.stringify({ text: 'north' }), { status: 200 });
+    },
+    rateLimiter: createFixedWindowRateLimiter({ limit: 1, windowMs: 60_000 }),
+  });
+  const first = response();
+  const second = response();
+  const actorHeaders = { 'x-forwarded-for': '203.0.113.9' };
+
+  await handler(request({ body: { ...requestBody, audio: { base64: '', mimeType: 'audio/webm' } }, headers: actorHeaders }), first);
+  await handler(request({ headers: actorHeaders }), second);
+
+  assert.equal(first.statusCode, 400);
+  assert.equal(second.statusCode, 429);
+  assert.equal(second.headers['retry-after'], '60');
+  assert.equal(called, 0);
 });

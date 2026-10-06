@@ -9,6 +9,8 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'https://pipepilot-app-git-codex-voice-command-service-pipe-pilot.vercel.app',
 ];
 const UPSTREAM_TIMEOUT_MS = 40_000;
+const DEFAULT_RATE_LIMIT = 12;
+const DEFAULT_RATE_WINDOW_MS = 60_000;
 const RESPONSE_FORMAT = {
   type: 'json_schema',
   name: 'pipe_pilot_voice_command',
@@ -54,7 +56,38 @@ const RESPONSE_FORMAT = {
 
 export const config = { maxDuration: 45 };
 
-export function createVoiceCommandHandler({ environment = process.env, fetcher = globalThis.fetch } = {}) {
+export function createFixedWindowRateLimiter({
+  limit = DEFAULT_RATE_LIMIT,
+  windowMs = DEFAULT_RATE_WINDOW_MS,
+  clock = Date.now,
+} = {}) {
+  const actors = new Map();
+  return (request) => {
+    const now = clock();
+    const actor = requestActor(request);
+    const current = actors.get(actor);
+    if (!current || now >= current.resetAt) {
+      actors.set(actor, { count: 1, resetAt: now + windowMs });
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+    if (current.count >= limit) {
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(1, Math.ceil((current.resetAt - now) / 1000)),
+      };
+    }
+    current.count += 1;
+    return { allowed: true, retryAfterSeconds: 0 };
+  };
+}
+
+const defaultVoiceRateLimiter = createFixedWindowRateLimiter();
+
+export function createVoiceCommandHandler({
+  environment = process.env,
+  fetcher = globalThis.fetch,
+  rateLimiter = defaultVoiceRateLimiter,
+} = {}) {
   return async function voiceCommandHandler(request, response) {
     response.setHeader('Cache-Control', 'no-store');
     if (!allowRequestOrigin(request, response, environment)) {
@@ -67,6 +100,11 @@ export function createVoiceCommandHandler({ environment = process.env, fetcher =
     if (request.method !== 'POST') {
       response.setHeader('Allow', 'POST, OPTIONS');
       return response.status(405).json({ error: 'Method not allowed.' });
+    }
+    const rate = rateLimiter(request);
+    if (!rate.allowed) {
+      response.setHeader('Retry-After', String(rate.retryAfterSeconds));
+      return response.status(429).json({ error: 'Too many voice command requests. Try again shortly.' });
     }
     const contentLength = Number(header(request, 'content-length') ?? 0);
     if (contentLength > MAX_BODY_BYTES) {
@@ -205,6 +243,15 @@ function allowRequestOrigin(request, response, environment) {
 function header(request, name) {
   const value = request.headers?.[name] ?? request.headers?.[name.toLowerCase()];
   return Array.isArray(value) ? value[0] : value;
+}
+
+function requestActor(request) {
+  const forwarded = header(request, 'x-forwarded-for');
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim().slice(0, 128);
+  }
+  const remote = request.socket?.remoteAddress;
+  return typeof remote === 'string' && remote.trim() ? remote.trim().slice(0, 128) : 'unknown';
 }
 
 function safelyParse(value) {
