@@ -31,8 +31,10 @@ const RESPONSE_FORMAT = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              fitting: { type: 'string' },
+              startFitting: { type: 'string' },
+              endFitting: { type: 'string' },
               direction: { type: 'string', enum: ['north', 'south', 'east', 'west', 'up', 'down'] },
+              dimensionBasis: { type: 'string', enum: ['end_to_end', 'end_to_center', 'center_to_center'] },
               length: {
                 type: 'object',
                 additionalProperties: false,
@@ -44,7 +46,7 @@ const RESPONSE_FORMAT = {
                 required: ['feet', 'inches', 'eighths'],
               },
             },
-            required: ['fitting', 'direction', 'length'],
+            required: ['startFitting', 'endFitting', 'direction', 'dimensionBasis', 'length'],
           },
         ],
       },

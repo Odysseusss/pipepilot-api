@@ -23,7 +23,7 @@ const requestBody = {
 
 test('prompt forbids flattening gasket and multi-fitting instructions', () => {
   assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /Never silently discard a[\s\S]*gasket/);
-  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /multiple fitting placements/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /more than one measured pipe/);
   assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /return clarification/);
   assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /route null/);
 });
@@ -64,7 +64,8 @@ test('transcribes audio then returns a structured command', async () => {
         output_text: JSON.stringify({
           action: 'draw_route', confidence: 0.98, ambiguous: false,
           route: {
-            fitting: 'ELBOW_90', direction: 'north',
+            startFitting: 'PLAIN_END', endFitting: 'ELBOW_90',
+            direction: 'north', dimensionBasis: 'end_to_center',
             length: { feet: 0, inches: 90, eighths: 0 },
           },
           viewpoint: null, clarificationQuestion: null, alternatives: [],
@@ -78,7 +79,8 @@ test('transcribes audio then returns a structured command', async () => {
 
   assert.equal(result.statusCode, 200);
   assert.equal(result.body.transcript, 'run a 90 90 north');
-  assert.equal(result.body.route.fitting, 'ELBOW_90');
+  assert.equal(result.body.route.startFitting, 'PLAIN_END');
+  assert.equal(result.body.route.endFitting, 'ELBOW_90');
   assert.equal(result.body.route.length.inches, 90);
   assert.equal(calls.length, 2);
   const uploadedFile = calls[0].init.body.get('file');
@@ -88,6 +90,14 @@ test('transcribes audio then returns a structured command', async () => {
   assert.equal(interpretationRequest.store, false);
   assert.equal(interpretationRequest.max_output_tokens, 1500);
   assert.equal(result.headers['access-control-allow-origin'], previewOrigin);
+});
+
+test('prompt treats two endpoint fittings as one drawable run', () => {
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /Exactly two[\s\S]*ONE route/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /weld neck to weld neck/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /startFitting WNRF/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /endFitting WNRF/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /end_to_end/);
 });
 
 test('reports truncated interpretation JSON as an interpretation failure', async () => {
