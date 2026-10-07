@@ -10,6 +10,7 @@ const DEFAULT_ALLOWED_ORIGINS = [
 ];
 const UPSTREAM_CALL_TIMEOUT_MS = 25_000;
 const UPSTREAM_TOTAL_BUDGET_MS = 40_000;
+const INTERPRETATION_MAX_OUTPUT_TOKENS = 1500;
 const DEFAULT_RATE_LIMIT = 12;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const RESPONSE_FORMAT = {
@@ -92,6 +93,19 @@ class VoiceUpstreamError extends Error {
     this.status = response.status;
     this.retryAfter = response.headers.get('retry-after');
     this.responseBody = bodyText.slice(0, 2000);
+  }
+}
+
+class VoiceInterpretationError extends Error {
+  constructor(message, responseBody) {
+    super(message);
+    this.name = 'VoiceInterpretationError';
+    this.phase = 'interpretation';
+    this.responseBody = JSON.stringify({
+      responseStatus: responseBody?.status ?? null,
+      incompleteDetails: responseBody?.incomplete_details ?? null,
+      outputLength: responseText(responseBody).length,
+    });
   }
 }
 
@@ -187,6 +201,12 @@ export function createVoiceCommandHandler({
           upstreamStage: error.phase,
         });
       }
+      if (error instanceof VoiceInterpretationError) {
+        return response.status(502).json({
+          error: 'Voice interpretation returned incomplete data.',
+          upstreamStage: error.phase,
+        });
+      }
       if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
         return response.status(504).json({ error: 'Voice command upstream timed out.' });
       }
@@ -239,13 +259,22 @@ async function interpret(transcript, requestBody, {
       model,
       instructions: VOICE_COMMAND_SYSTEM_PROMPT,
       input: `${transcript}\n\n<pipe_pilot_context>${context}</pipe_pilot_context>`,
-      max_output_tokens: 500,
+      max_output_tokens: INTERPRETATION_MAX_OUTPUT_TOKENS,
       store: false,
       text: { format: RESPONSE_FORMAT },
     }),
   }, 'interpretation');
   const body = await readUpstreamJson(response, 'interpretation');
-  const parsed = JSON.parse(responseText(body));
+  const output = responseText(body);
+  if (body?.status === 'incomplete' || !output) {
+    throw new VoiceInterpretationError('incomplete_interpretation', body);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(output);
+  } catch (cause) {
+    throw new VoiceInterpretationError(cause?.message || 'invalid_interpretation_json', body);
+  }
   if (!parsed || typeof parsed.action !== 'string') throw new Error('invalid_interpretation');
   return parsed;
 }

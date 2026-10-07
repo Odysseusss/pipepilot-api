@@ -76,8 +76,38 @@ test('transcribes audio then returns a structured command', async () => {
   const uploadedFile = calls[0].init.body.get('file');
   assert.equal(uploadedFile.name, 'pipepilot-voice.mp4');
   assert.equal(uploadedFile.type, 'audio/mp4');
-  assert.equal(JSON.parse(calls[1].init.body).store, false);
+  const interpretationRequest = JSON.parse(calls[1].init.body);
+  assert.equal(interpretationRequest.store, false);
+  assert.equal(interpretationRequest.max_output_tokens, 1500);
   assert.equal(result.headers['access-control-allow-origin'], previewOrigin);
+});
+
+test('reports truncated interpretation JSON as an interpretation failure', async () => {
+  const handler = createVoiceCommandHandler({
+    environment: {
+      OPENAI_API_KEY: 'test-key',
+      AI_BASE_URL: 'https://example.test/v1',
+    },
+    fetcher: async (url) => {
+      if (url.endsWith('/audio/transcriptions')) {
+        return new Response(JSON.stringify({ text: 'run north twelve inches' }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({
+        status: 'incomplete',
+        incomplete_details: { reason: 'max_output_tokens' },
+        output_text: '{"action":"draw_route",',
+      }), { status: 200 });
+    },
+  });
+  const result = response();
+
+  await handler(request(), result);
+
+  assert.equal(result.statusCode, 502);
+  assert.equal(result.body.error, 'Voice interpretation returned incomplete data.');
+  assert.equal(result.body.upstreamStage, 'interpretation');
 });
 
 test('shares one upstream budget across both sequential calls', () => {
