@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   createFixedWindowRateLimiter,
   createVoiceCommandHandler,
+  upstreamTimeoutMs,
 } from '../api/voice-command.mjs';
 
 const previewOrigin =
@@ -77,6 +78,15 @@ test('transcribes audio then returns a structured command', async () => {
   assert.equal(uploadedFile.type, 'audio/mp4');
   assert.equal(JSON.parse(calls[1].init.body).store, false);
   assert.equal(result.headers['access-control-allow-origin'], previewOrigin);
+});
+
+test('shares one upstream budget across both sequential calls', () => {
+  const deadline = 40_000;
+
+  assert.equal(upstreamTimeoutMs(deadline, () => 0), 25_000);
+  assert.equal(upstreamTimeoutMs(deadline, () => 12_000), 25_000);
+  assert.equal(upstreamTimeoutMs(deadline, () => 27_000), 13_000);
+  assert.equal(upstreamTimeoutMs(deadline, () => 40_000), 1);
 });
 
 test('maps upstream authentication failure to service misconfiguration', async () => {

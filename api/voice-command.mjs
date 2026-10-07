@@ -8,7 +8,8 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'https://app.pipepilotapp.com',
   'https://pipepilot-app-git-codex-voice-command-service-pipe-pilot.vercel.app',
 ];
-const UPSTREAM_TIMEOUT_MS = 40_000;
+const UPSTREAM_CALL_TIMEOUT_MS = 25_000;
+const UPSTREAM_TOTAL_BUDGET_MS = 40_000;
 const DEFAULT_RATE_LIMIT = 12;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const RESPONSE_FORMAT = {
@@ -98,6 +99,7 @@ export function createVoiceCommandHandler({
   environment = process.env,
   fetcher = globalThis.fetch,
   rateLimiter = defaultVoiceRateLimiter,
+  clock = Date.now,
 } = {}) {
   return async function voiceCommandHandler(request, response) {
     response.setHeader('Cache-Control', 'no-store');
@@ -131,23 +133,29 @@ export function createVoiceCommandHandler({
     const apiKey = environment.OPENAI_API_KEY?.trim();
     if (!apiKey) return response.status(503).json({ error: 'Voice commands are not configured.' });
     const baseUrl = (environment.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+    const upstreamDeadline = clock() + UPSTREAM_TOTAL_BUDGET_MS;
     try {
       const transcript = await transcribe(audio, {
         apiKey,
         baseUrl,
         fetcher,
         model: environment.VOICE_TRANSCRIBE_MODEL || DEFAULT_TRANSCRIBE_MODEL,
+        upstreamDeadline,
+        clock,
       });
       const command = await interpret(transcript, body, {
         apiKey,
         baseUrl,
         fetcher,
         model: environment.VOICE_COMMAND_MODEL || DEFAULT_MODEL,
+        upstreamDeadline,
+        clock,
       });
       return response.status(200).json({ transcript, ...command });
     } catch (error) {
       console.error('Voice command upstream failed', {
         name: error?.name ?? 'unknown',
+        message: error?.message ?? null,
         phase: error?.phase ?? 'unknown',
         status: error?.status ?? null,
         body: error?.responseBody ?? null,
@@ -187,16 +195,23 @@ export function createVoiceCommandHandler({
   };
 }
 
-async function transcribe(audio, { apiKey, baseUrl, fetcher, model }) {
+async function transcribe(audio, {
+  apiKey,
+  baseUrl,
+  fetcher,
+  model,
+  upstreamDeadline,
+  clock,
+}) {
   const form = new FormData();
   form.append('model', model);
   form.append('file', new Blob([audio.bytes], { type: audio.mimeType }), audio.fileName);
-  const response = await fetcher(`${baseUrl}/audio/transcriptions`, {
+  const response = await fetchUpstream(fetcher, `${baseUrl}/audio/transcriptions`, {
     method: 'POST',
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    signal: AbortSignal.timeout(upstreamTimeoutMs(upstreamDeadline, clock)),
     headers: { authorization: `Bearer ${apiKey}` },
     body: form,
-  });
+  }, 'transcription');
   const body = await readUpstreamJson(response, 'transcription');
   if (!response.ok || typeof body?.text !== 'string' || !body.text.trim()) {
     throw new Error('invalid_transcription');
@@ -204,14 +219,21 @@ async function transcribe(audio, { apiKey, baseUrl, fetcher, model }) {
   return body.text.trim();
 }
 
-async function interpret(transcript, requestBody, { apiKey, baseUrl, fetcher, model }) {
+async function interpret(transcript, requestBody, {
+  apiKey,
+  baseUrl,
+  fetcher,
+  model,
+  upstreamDeadline,
+  clock,
+}) {
   const context = JSON.stringify({
     drawing: requestBody.drawingSummary ?? null,
     selection: requestBody.selection ?? null,
   });
-  const response = await fetcher(`${baseUrl}/responses`, {
+  const response = await fetchUpstream(fetcher, `${baseUrl}/responses`, {
     method: 'POST',
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    signal: AbortSignal.timeout(upstreamTimeoutMs(upstreamDeadline, clock)),
     headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
     body: JSON.stringify({
       model,
@@ -221,7 +243,7 @@ async function interpret(transcript, requestBody, { apiKey, baseUrl, fetcher, mo
       store: false,
       text: { format: RESPONSE_FORMAT },
     }),
-  });
+  }, 'interpretation');
   const body = await readUpstreamJson(response, 'interpretation');
   const parsed = JSON.parse(responseText(body));
   if (!parsed || typeof parsed.action !== 'string') throw new Error('invalid_interpretation');
@@ -257,6 +279,22 @@ async function readUpstreamJson(response, phase) {
   const body = safelyParse(bodyText);
   if (!response.ok) throw new VoiceUpstreamError(phase, response, bodyText);
   return body;
+}
+
+async function fetchUpstream(fetcher, url, init, phase) {
+  try {
+    return await fetcher(url, init);
+  } catch (cause) {
+    const error = new Error(cause?.message || `${phase}_request_failed`, { cause });
+    error.name = cause?.name || 'VoiceUpstreamRequestError';
+    error.phase = phase;
+    throw error;
+  }
+}
+
+export function upstreamTimeoutMs(deadline, clock = Date.now) {
+  const remaining = deadline - clock();
+  return Math.max(1, Math.min(UPSTREAM_CALL_TIMEOUT_MS, remaining));
 }
 
 function responseText(result) {
