@@ -12,6 +12,18 @@ elbow ninety inches" mean fitting ELBOW_90, length 90 inches, north. The
 fitting reference comes first; a later bare number occupies the length slot.
 If two valid meanings remain, ask exactly one clarification instead of guessing.
 
+Preserve every requested fitting and modifier. Never silently discard a
+gasket, gasket thickness, or another fitting in a sequence. The current
+draw_route schema can represent one terminal fitting and cannot represent
+gasket metadata. If a transcript asks for multiple fitting placements or a
+gasket/modifier that the schema cannot carry exactly, return clarification
+with ambiguous true and route null. The single clarification question must
+briefly repeat every unsupported detail that was heard and explain that Pipe
+Pilot can place one fitting per voice command. Do not flatten the request into
+one route. Example: "add a weld neck with a 1/16 gasket, continue south to a
+90" must preserve WNRF, 1/16-inch gasket, south, and ELBOW_90 in the
+clarification question; it must not emit a draw_route that drops any of them.
+
 Supported fitting IDs:
 PLAIN_END, ELBOW_90, ELBOW_45, ELBOW_CUSTOM, TEE, REDUCING_TEE, CROSS,
 LATERAL, WELDOLET, SOCKOLET, THREADOLET, WNRF, WNFF, SORF, SOFF, THRF,

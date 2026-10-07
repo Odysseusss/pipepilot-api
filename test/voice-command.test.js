@@ -6,6 +6,7 @@ import {
   createVoiceCommandHandler,
   upstreamTimeoutMs,
 } from '../api/voice-command.mjs';
+import { VOICE_COMMAND_SYSTEM_PROMPT } from '../api/_lib/voice-command-prompt.mjs';
 
 const previewOrigin =
   'https://pipepilot-app-git-codex-voice-command-service-pipe-pilot.vercel.app';
@@ -19,6 +20,13 @@ const requestBody = {
   drawingSummary: { runCount: 1 },
   selection: null,
 };
+
+test('prompt forbids flattening gasket and multi-fitting instructions', () => {
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /Never silently discard a[\s\S]*gasket/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /multiple fitting placements/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /return clarification/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /route null/);
+});
 
 function request({ body = requestBody, method = 'POST', headers = {} } = {}) {
   return {
