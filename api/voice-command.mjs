@@ -83,6 +83,17 @@ export function createFixedWindowRateLimiter({
 
 const defaultVoiceRateLimiter = createFixedWindowRateLimiter();
 
+class VoiceUpstreamError extends Error {
+  constructor(phase, response, bodyText) {
+    super(`${phase}_failed`);
+    this.name = 'VoiceUpstreamError';
+    this.phase = phase;
+    this.status = response.status;
+    this.retryAfter = response.headers.get('retry-after');
+    this.responseBody = bodyText.slice(0, 2000);
+  }
+}
+
 export function createVoiceCommandHandler({
   environment = process.env,
   fetcher = globalThis.fetch,
@@ -135,7 +146,42 @@ export function createVoiceCommandHandler({
       });
       return response.status(200).json({ transcript, ...command });
     } catch (error) {
-      console.error('Voice command upstream failed', error?.name ?? 'unknown');
+      console.error('Voice command upstream failed', {
+        name: error?.name ?? 'unknown',
+        phase: error?.phase ?? 'unknown',
+        status: error?.status ?? null,
+        body: error?.responseBody ?? null,
+      });
+      if (error instanceof VoiceUpstreamError) {
+        if (error.status === 401 || error.status === 403) {
+          return response.status(500).json({
+            error: 'Voice service is misconfigured.',
+            upstreamStage: error.phase,
+          });
+        }
+        if (error.status === 429) {
+          if (error.retryAfter) response.setHeader('Retry-After', error.retryAfter);
+          return response.status(429).json({
+            error: 'Voice service is busy. Try again shortly.',
+            upstreamStage: error.phase,
+          });
+        }
+        if (error.status >= 400 && error.status < 500) {
+          return response.status(error.status).json({
+            error: error.phase === 'transcription'
+              ? 'Voice transcription rejected the audio.'
+              : 'Voice interpretation request was rejected.',
+            upstreamStage: error.phase,
+          });
+        }
+        return response.status(502).json({
+          error: 'Voice service upstream is unavailable.',
+          upstreamStage: error.phase,
+        });
+      }
+      if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+        return response.status(504).json({ error: 'Voice command upstream timed out.' });
+      }
       return response.status(502).json({ error: 'Voice command could not be processed.' });
     }
   };
@@ -151,9 +197,9 @@ async function transcribe(audio, { apiKey, baseUrl, fetcher, model }) {
     headers: { authorization: `Bearer ${apiKey}` },
     body: form,
   });
-  const body = await response.json();
+  const body = await readUpstreamJson(response, 'transcription');
   if (!response.ok || typeof body?.text !== 'string' || !body.text.trim()) {
-    throw new Error('transcription_failed');
+    throw new Error('invalid_transcription');
   }
   return body.text.trim();
 }
@@ -176,8 +222,7 @@ async function interpret(transcript, requestBody, { apiKey, baseUrl, fetcher, mo
       text: { format: RESPONSE_FORMAT },
     }),
   });
-  const body = await response.json();
-  if (!response.ok) throw new Error('interpretation_failed');
+  const body = await readUpstreamJson(response, 'interpretation');
   const parsed = JSON.parse(responseText(body));
   if (!parsed || typeof parsed.action !== 'string') throw new Error('invalid_interpretation');
   return parsed;
@@ -188,14 +233,30 @@ function decodeAudio(body) {
   const encoded = body?.audio?.base64;
   const mimeType = body?.audio?.mimeType;
   if (typeof encoded !== 'string' || typeof mimeType !== 'string') return null;
-  if (!/^audio\/(?:mp4|webm|mpeg|wav|x-m4a)(?:;.*)?$/i.test(mimeType)) return null;
+  const normalizedMimeType = mimeType.split(';', 1)[0].trim().toLowerCase();
+  if (!/^audio\/(?:mp4|webm|mpeg|wav|x-m4a)$/i.test(normalizedMimeType)) return null;
   const bytes = Buffer.from(encoded, 'base64');
   if (!bytes.length || bytes.length > MAX_AUDIO_BYTES) return null;
   return {
     bytes,
-    mimeType,
-    fileName: mimeType.includes('mp4') ? 'pipepilot-voice.m4a' : 'pipepilot-voice.webm',
+    mimeType: normalizedMimeType,
+    fileName: audioFileName(normalizedMimeType),
   };
+}
+
+function audioFileName(mimeType) {
+  if (mimeType === 'audio/mp4') return 'pipepilot-voice.mp4';
+  if (mimeType === 'audio/x-m4a') return 'pipepilot-voice.m4a';
+  if (mimeType === 'audio/mpeg') return 'pipepilot-voice.mp3';
+  if (mimeType === 'audio/wav') return 'pipepilot-voice.wav';
+  return 'pipepilot-voice.webm';
+}
+
+async function readUpstreamJson(response, phase) {
+  const bodyText = await response.text();
+  const body = safelyParse(bodyText);
+  if (!response.ok) throw new VoiceUpstreamError(phase, response, bodyText);
+  return body;
 }
 
 function responseText(result) {

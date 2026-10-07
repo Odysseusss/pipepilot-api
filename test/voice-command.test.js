@@ -13,7 +13,7 @@ const requestBody = {
   mode: 'voice_command',
   audio: {
     base64: Buffer.from('recorded audio').toString('base64'),
-    mimeType: 'audio/webm',
+    mimeType: 'audio/mp4; codecs=mp4a.40.2',
   },
   drawingSummary: { runCount: 1 },
   selection: null,
@@ -72,8 +72,62 @@ test('transcribes audio then returns a structured command', async () => {
   assert.equal(result.body.route.fitting, 'ELBOW_90');
   assert.equal(result.body.route.length.inches, 90);
   assert.equal(calls.length, 2);
+  const uploadedFile = calls[0].init.body.get('file');
+  assert.equal(uploadedFile.name, 'pipepilot-voice.mp4');
+  assert.equal(uploadedFile.type, 'audio/mp4');
   assert.equal(JSON.parse(calls[1].init.body).store, false);
   assert.equal(result.headers['access-control-allow-origin'], previewOrigin);
+});
+
+test('maps upstream authentication failure to service misconfiguration', async () => {
+  const handler = createVoiceCommandHandler({
+    environment: { OPENAI_API_KEY: 'invalid-key' },
+    fetcher: async () => new Response(
+      JSON.stringify({ error: { message: 'Incorrect API key provided' } }),
+      { status: 401 },
+    ),
+  });
+  const result = response();
+
+  await handler(request(), result);
+
+  assert.equal(result.statusCode, 500);
+  assert.equal(result.body.error, 'Voice service is misconfigured.');
+  assert.equal(result.body.upstreamStage, 'transcription');
+});
+
+test('preserves retryable upstream status and retry-after', async () => {
+  const handler = createVoiceCommandHandler({
+    environment: { OPENAI_API_KEY: 'test-key' },
+    fetcher: async () => new Response(
+      JSON.stringify({ error: { message: 'Rate limited' } }),
+      { status: 429, headers: { 'retry-after': '12' } },
+    ),
+  });
+  const result = response();
+
+  await handler(request(), result);
+
+  assert.equal(result.statusCode, 429);
+  assert.equal(result.headers['retry-after'], '12');
+  assert.equal(result.body.upstreamStage, 'transcription');
+});
+
+test('forwards an upstream audio rejection as a client error', async () => {
+  const handler = createVoiceCommandHandler({
+    environment: { OPENAI_API_KEY: 'test-key' },
+    fetcher: async () => new Response(
+      JSON.stringify({ error: { message: 'Invalid file format' } }),
+      { status: 400 },
+    ),
+  });
+  const result = response();
+
+  await handler(request(), result);
+
+  assert.equal(result.statusCode, 400);
+  assert.equal(result.body.error, 'Voice transcription rejected the audio.');
+  assert.equal(result.body.upstreamStage, 'transcription');
 });
 
 test('rejects unknown origins before calling upstream', async () => {
