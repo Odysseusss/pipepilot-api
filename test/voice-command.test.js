@@ -21,11 +21,15 @@ const requestBody = {
   selection: null,
 };
 
-test('prompt forbids flattening gasket and multi-fitting instructions', () => {
-  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /Never silently discard a[\s\S]*gasket/);
-  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /more than one measured pipe/);
-  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /return clarification/);
-  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /route null/);
+test('prompt requires multi-leg routes and first-class gaskets', () => {
+  assert.match(
+    VOICE_COMMAND_SYSTEM_PROMPT,
+    /Never flatten or silently discard[\s\S]*gasket/,
+  );
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /ordered routes list/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /multiple ordered legs/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /gasketTreatment ring/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /never a reason to[\s\S]*clarify/i);
 });
 
 function request({ body = requestBody, method = 'POST', headers = {} } = {}) {
@@ -67,7 +71,14 @@ test('transcribes audio then returns a structured command', async () => {
             startFitting: 'PLAIN_END', endFitting: 'ELBOW_90',
             direction: 'north', dimensionBasis: 'end_to_center',
             length: { feet: 0, inches: 90, eighths: 0 },
+            gasketTreatment: null, gasketThickness: null,
           },
+          routes: [{
+            startFitting: 'PLAIN_END', endFitting: 'ELBOW_90',
+            direction: 'north', dimensionBasis: 'end_to_center',
+            length: { feet: 0, inches: 90, eighths: 0 },
+            gasketTreatment: null, gasketThickness: null,
+          }],
           viewpoint: null, clarificationQuestion: null, alternatives: [],
         }),
       }), { status: 200 });
@@ -82,6 +93,7 @@ test('transcribes audio then returns a structured command', async () => {
   assert.equal(result.body.route.startFitting, 'PLAIN_END');
   assert.equal(result.body.route.endFitting, 'ELBOW_90');
   assert.equal(result.body.route.length.inches, 90);
+  assert.equal(result.body.routes.length, 1);
   assert.equal(calls.length, 2);
   const uploadedFile = calls[0].init.body.get('file');
   assert.equal(uploadedFile.name, 'pipepilot-voice.mp4');
@@ -93,11 +105,21 @@ test('transcribes audio then returns a structured command', async () => {
 });
 
 test('prompt treats two endpoint fittings as one drawable run', () => {
-  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /Exactly two[\s\S]*ONE route/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /Exactly two[\s\S]*one leg/);
   assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /weld neck to weld neck/);
-  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /startFitting WNRF/);
-  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /endFitting WNRF/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /WNRF to WNRF/);
   assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /end_to_end/);
+});
+
+test('prompt keeps chunk order and shared fitting identity', () => {
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /Leg N's[\s\S]*endFitting[\s\S]*leg N\+1's startFitting/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /flange to 90 running north 4 feet/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /ELBOW_90 to WNRF up 5 feet/);
+});
+
+test('prompt handles the field gasket utterances without clarification', () => {
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /lower weld neck[\s\S]*1\/16 gasket/);
+  assert.match(VOICE_COMMAND_SYSTEM_PROMPT, /slip-on raised face[\s\S]*ring\/sixteenth gasket/);
 });
 
 test('reports truncated interpretation JSON as an interpretation failure', async () => {

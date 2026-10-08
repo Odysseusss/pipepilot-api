@@ -13,6 +13,43 @@ const UPSTREAM_TOTAL_BUDGET_MS = 40_000;
 const INTERPRETATION_MAX_OUTPUT_TOKENS = 1500;
 const DEFAULT_RATE_LIMIT = 12;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
+const ROUTE_LEG_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    startFitting: { type: 'string' },
+    endFitting: { type: 'string' },
+    direction: { type: 'string', enum: ['north', 'south', 'east', 'west', 'up', 'down'] },
+    dimensionBasis: { type: 'string', enum: ['end_to_end', 'end_to_center', 'center_to_center'] },
+    length: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        feet: { type: 'integer', minimum: 0 },
+        inches: { type: 'integer', minimum: 0 },
+        eighths: { type: 'integer', minimum: 0, maximum: 7 },
+      },
+      required: ['feet', 'inches', 'eighths'],
+    },
+    gasketTreatment: {
+      type: ['string', 'null'],
+      enum: ['fullFace', 'ring', 'spiralWound', 'vendorSupplied', 'noneRequired', null],
+    },
+    gasketThickness: {
+      type: ['string', 'null'],
+      enum: ['sixteenth', 'eighth', null],
+    },
+  },
+  required: [
+    'startFitting',
+    'endFitting',
+    'direction',
+    'dimensionBasis',
+    'length',
+    'gasketTreatment',
+    'gasketThickness',
+  ],
+};
 const RESPONSE_FORMAT = {
   type: 'json_schema',
   name: 'pipe_pilot_voice_command',
@@ -27,34 +64,19 @@ const RESPONSE_FORMAT = {
       route: {
         anyOf: [
           { type: 'null' },
-          {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              startFitting: { type: 'string' },
-              endFitting: { type: 'string' },
-              direction: { type: 'string', enum: ['north', 'south', 'east', 'west', 'up', 'down'] },
-              dimensionBasis: { type: 'string', enum: ['end_to_end', 'end_to_center', 'center_to_center'] },
-              length: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                  feet: { type: 'integer', minimum: 0 },
-                  inches: { type: 'integer', minimum: 0 },
-                  eighths: { type: 'integer', minimum: 0, maximum: 7 },
-                },
-                required: ['feet', 'inches', 'eighths'],
-              },
-            },
-            required: ['startFitting', 'endFitting', 'direction', 'dimensionBasis', 'length'],
-          },
+          ROUTE_LEG_SCHEMA,
         ],
+      },
+      routes: {
+        type: 'array',
+        items: ROUTE_LEG_SCHEMA,
+        maxItems: 8,
       },
       viewpoint: { type: ['string', 'null'], enum: ['SE', 'NE', 'NW', 'SW', null] },
       clarificationQuestion: { type: ['string', 'null'] },
       alternatives: { type: 'array', items: { type: 'string' }, maxItems: 3 },
     },
-    required: ['action', 'confidence', 'ambiguous', 'route', 'viewpoint', 'clarificationQuestion', 'alternatives'],
+    required: ['action', 'confidence', 'ambiguous', 'route', 'routes', 'viewpoint', 'clarificationQuestion', 'alternatives'],
   },
 };
 
